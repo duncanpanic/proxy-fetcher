@@ -33,12 +33,11 @@ jobs:
           cat sources.txt
           echo "=== source count: $(wc -l < sources.txt) ==="
 
-      - name: Download subconverter (prebuilt binary)
+      - name: Download subconverter (tindy2013 v0.9.0)
         run: |
           set -e
-          # Use a specific known version that works
-          wget -q https://github.com/Humbertg/subconverter-ng/releases/download/v1.7.1/subconverter-linux.zip -O sub.zip
-          unzip -o sub.zip -d subconverter/
+          wget -q https://github.com/tindy2013/subconverter/releases/download/v0.9.0/subconverter_linux64.tar.gz -O sub.tar.gz
+          tar -xzf sub.tar.gz -C subconverter/
           chmod +x subconverter/subconverter
           ls -la subconverter/
           ./subconverter/subconverter -h 2>&1 | head -5
