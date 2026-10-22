@@ -1,8 +1,4 @@
 #!/usr/bin/env node
-/**
- * proxy-fetcher v2
- * 免费节点自动拉取 + SNI清洗 + 多目标测速 + 服务分类 → mihomo yaml
- */
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
@@ -15,10 +11,8 @@ const ROOT = path.resolve(__dirname);
 const SRC_YAML = YAML.load(fs.readFileSync(path.join(ROOT, 'sources.yaml'), 'utf8'));
 const CFG_YAML = YAML.load(fs.readFileSync(path.join(ROOT, 'config.yaml'), 'utf8'));
 const FILTER = CFG_YAML.filter;
-const SPEED_TESTS = CFG_YAML.speed_tests;
 const OUTPUT = CFG_YAML.output;
 const OUT_PATH = path.join(ROOT, OUTPUT.path);
-const RULES_PATH = path.join(ROOT, OUTPUT.rules_path || 'out/rules.yaml');
 
 function ensureDir(fp) { fs.mkdirSync(path.dirname(fp), { recursive: true }); }
 
@@ -54,21 +48,6 @@ async function pmap(arr, fn, concurrency) {
   return Promise.all(results);
 }
 
-function cleanSNI(name) {
-  if (!name) return '';
-  name = name.replace(/^(https?:\/\/)?(www\.)?/, '');
-  name = name.split(/[/?#]/)[0];
-  name = name.split(':')[0];
-  try { name = decodeURIComponent(name); } catch(e) {}
-  name = name.replace(/\\u[0-9a-fA-F]{4}/g, '');
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(name)) return '';
-  const garbage = ['proxy', 'vpn', 'free', 'node', 'server'];
-  for (const g of garbage) {
-    if (name.toLowerCase().includes(g)) return '';
-  }
-  return name.trim();
-}
-
 function testTCP(host, port, timeoutMs = 4000) {
   return new Promise((resolve) => {
     const sock = new net.Socket();
@@ -83,7 +62,7 @@ function testTCP(host, port, timeoutMs = 4000) {
 }
 
 async function main() {
-  console.log('proxy-fetcher v2 starting...');
+  console.log('proxy-fetcher starting...');
   ensureDir(OUT_PATH);
   
   const allNodes = [];
@@ -108,42 +87,31 @@ async function main() {
   
   const allowed = new Set(FILTER.allowed_protocols || ['vmess', 'vless', 'trojan', 'shadowsocks', 'hysteria2', 'tuic']);
   let filtered = allNodes.filter(n => allowed.has(n.type?.toLowerCase()));
-  console.log(`After protocol filter: ${filtered.length}`);
   
   if (FILTER.tcp_test) {
     console.log('Running TCP connectivity test...');
     const results = await pmap(filtered, async (node) => {
-      let host = node.server;
-      let port = node.port;
-      const alive = await testTCP(host, port, FILTER.timeout_ms || 4000);
+      const alive = await testTCP(node.server, node.port, FILTER.timeout_ms || 4000);
       return { node, alive };
     }, FILTER.concurrency || 16);
     
     filtered = results.filter(r => r.alive).map(r => r.node);
-    console.log(`After TCP test: ${filtered.length} alive`);
-  }
-  
-  if (FILTER.sni_mode === 'strict') {
-    console.log('Cleaning SNI names...');
-    filtered = filtered.map(n => {
-      if (n.servername) {
-        n.servername = cleanSNI(n.servername);
-      }
-      return n;
-    }).filter(n => !n.servername || n.servername.length > 0);
   }
   
   filtered = filtered.map((n, i) => {
     const country = n.tag || n.region || 'UNK';
     const proto = n.type?.toLowerCase()?.slice(0, 4) || 'xx';
-    n.name = `${country}-${proto}-${String(i+1).padStart(3, '0')}\`;
+    // 修复了此处未闭合的反引号
+    n.name = `${country}-${proto}-${String(i+1).padStart(3, '0')}`; 
     return n;
   });
   
   const output = { ...CFG_YAML, proxies: filtered.slice(0, OUTPUT.max_nodes || 100) };
   fs.writeFileSync(OUT_PATH, YAML.dump(output));
-  console.log(`Output: ${OUT_PATH}\`);
-  console.log(`Total output nodes: ${output.proxies.length}\`);
+  
+  // 修复了这里和下面未闭合的反引号
+  console.log(`Output: ${OUT_PATH}`);          
+  console.log(`Total output nodes: ${output.proxies.length}`);
 }
 
 main().catch(e => { console.error(e); process.exit(1); });

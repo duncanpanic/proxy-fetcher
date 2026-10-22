@@ -1,6 +1,4 @@
 # mihomo config template (envsubst render)
-# 部署前修改 deploy.sh 顶部的 SUB_URL 和 MIHOMO_SECRET
-
 port: 7890
 socks-port: 7891
 mixed-port: 7892
@@ -28,37 +26,37 @@ dns:
 rule-providers:
   direct:
     type: http
-    behavior: classical
+    behavior: domain # 修正：mrs 不支持 classical
     url: "https://cdn.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/direct.mrs"
     interval: 86400
     format: mrs
   proxy:
     type: http
-    behavior: classical
+    behavior: domain
     url: "https://cdn.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/proxy.mrs"
     interval: 86400
     format: mrs
   telegram:
     type: http
-    behavior: classical
+    behavior: domain
     url: "https://cdn.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/telegram.mrs"
     interval: 86400
     format: mrs
   google:
     type: http
-    behavior: classical
+    behavior: domain
     url: "https://cdn.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/google.mrs"
     interval: 86400
     format: mrs
   openai:
     type: http
-    behavior: classical
+    behavior: domain
     url: "https://cdn.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/openai.mrs"
     interval: 86400
     format: mrs
   anthropic:
     type: http
-    behavior: classical
+    behavior: domain
     url: "https://cdn.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/anthropic.mrs"
     interval: 86400
     format: mrs
@@ -66,17 +64,17 @@ rule-providers:
 proxy-providers:
   free-nodes:
     type: http
-    url: "${SUB_URL:-https://node.lorcan.top/free-nodes.yaml}"
+    url: "https://node.lorcan.top/free-nodes.yaml" # 你的最终订阅链接
     interval: 21600
     health-check:
       enable: true
-      url: http://cp.cloudflare.com/generate_204
+      url: http://www.gstatic.com/generate_204 # 修正：更稳定的健康检查地址
       interval: 300
 
 proxy-groups:
   - name: "🤖 AI 服务"
     type: url-test
-    url: "http://cp.cloudflare.com/generate_204"
+    url: "http://www.gstatic.com/generate_204"
     interval: 300
     timeout: 5000
     tolerance: 150
@@ -86,7 +84,7 @@ proxy-groups:
 
   - name: "📱 Telegram"
     type: url-test
-    url: "http://cp.cloudflare.com/generate_204"
+    url: "http://www.gstatic.com/generate_204"
     interval: 300
     timeout: 5000
     lazy: true
@@ -98,7 +96,7 @@ proxy-groups:
 
   - name: "🛡️ 故障转移"
     type: fallback
-    url: "http://cp.cloudflare.com/generate_204"
+    url: "http://www.gstatic.com/generate_204"
     interval: 300
     use: [free-nodes]
 

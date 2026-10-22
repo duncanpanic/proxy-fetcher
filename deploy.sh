@@ -1,29 +1,23 @@
 #!/usr/bin/env bash
-# deploy.sh — Linux mihomo systemd 一键部署
-# 用法: sudo bash deploy.sh
 set -euo pipefail
 
-# === 配置区 ============================================
 SUB_URL="https://node.lorcan.top/free-nodes.yaml"
 MIHOMO_DIR="/etc/mihomo"
 BIN="/usr/local/bin/mihomo"
-# ========================================================
+MIHOMO_VERSION="v1.19.32" # 如果需更新核心，修改这里的版本号
 
 mkdir -p "$MIHOMO_DIR"
 
-# 渲染配置
 export SUB_URL MIHOMO_SECRET="${MIHOMO_SECRET:-$(openssl rand -hex 16)}"
 envsubst < config.yaml > "$MIHOMO_DIR/config.yaml"
 
-# 安装 mihomo 核心 (没有才装)
 if [[ ! -x $BIN ]]; then
-  echo "下载 mihomo 核心..."
-  curl -fsSL "https://github.com/MetaCubeX/mihomo/releases/latest/download/mihomo-linux-amd64-v1.18.0.gz" \
+  echo "下载 mihomo 核心 (${MIHOMO_VERSION})..."
+  curl -fsSL "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/mihomo-linux-amd64-${MIHOMO_VERSION}.gz" \
     | gzip -d > "$BIN"
   chmod +x "$BIN"
 fi
 
-# 安装 systemd 服务
 cat > /etc/systemd/system/mihomo.service <<'SERVICE_EOF'
 [Unit]
 Description=Mihomo Proxy Core
@@ -43,9 +37,8 @@ SERVICE_EOF
 
 systemctl daemon-reload
 systemctl enable --now mihomo
-
-# 验证
 systemctl status mihomo --no-pager -l
+
 echo ""
 echo "✅ 部署完成"
 echo "   订阅链接: $SUB_URL"
