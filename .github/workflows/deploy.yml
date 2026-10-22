@@ -22,21 +22,48 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
+
+      - name: Prepare sources
+        run: |
+          set -e
+          if [ -n "${{ secrets.NODE_SOURCES }}" ]; then
+            echo "${{ secrets.NODE_SOURCES }}" > sources.txt
+            echo "Using NODE_SOURCES secret"
+          else
+            echo "NODE_SOURCES not set, extracting from sources.yaml"
+            # Extract URLs from sources.yaml (one per line)
+            grep -E '^\s+url:' sources.yaml | sed 's/.*url: *//' | grep -v '^$' > sources.txt
+          fi
+          echo "=== sources.txt ==="
+          cat sources.txt
+          echo "=== source count: $(wc -l < sources.txt) ==="
 
       - name: Install subconverter
         run: |
-          wget -q https://github.com/Humbertg/subconverter-ng/releases/latest/download/subconverter-linux.zip -O sub.zip
+          set -e
+          echo "Downloading subconverter..."
+          # Try latest release first, fallback to specific version
+          wget -q https://github.com/Humbertg/subconverter-ng/releases/latest/download/subconverter-linux.zip -O sub.zip || {
+            echo "Latest release failed, trying v1.7.1"
+            wget -q https://github.com/Humbertg/subconverter-ng/releases/download/v1.7.1/subconverter-linux.zip -O sub.zip
+          }
           unzip -o sub.zip -d subconverter/
           chmod +x subconverter/subconverter
+          ls -la subconverter/
           echo "$GITHUB_WORKSPACE/subconverter" >> $GITHUB_PATH
 
       - name: Generate nodes
         run: |
-          echo "${{ secrets.NODE_SOURCES }}" > sources.txt
+          set -e
+          echo "Running subconverter..."
           subconverter -u sources.txt -o output.yaml -f Clash
+          echo "=== subconverter exit: $? ==="
           mkdir -p public
           cp output.yaml public/free-nodes.yaml
+          echo "=== output.yaml preview (first 40 lines) ==="
+          head -40 public/free-nodes.yaml
+          echo "=== node count: $(grep -c 'name:' public/free-nodes.yaml 2>/dev/null || echo 0) ==="
 
       - name: Install wrangler
         run: npm install -g wrangler
@@ -44,7 +71,9 @@ jobs:
       - name: Deploy to Cloudflare Pages
         env:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
         run: |
+          echo "Deploying to CF Pages project: node-sub"
           wrangler pages deploy public \
             --project-name node-sub \
             --branch main
