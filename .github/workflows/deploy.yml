@@ -37,6 +37,7 @@ jobs:
         run: |
           set -e
           wget -q https://github.com/tindy2013/subconverter/releases/download/v0.9.0/subconverter_linux64.tar.gz -O sub.tar.gz
+          mkdir -p subconverter
           tar -xzf sub.tar.gz -C subconverter/
           chmod +x subconverter/subconverter
           ls -la subconverter/
