@@ -1,0 +1,32 @@
+# proxy-fetcher/sources.yaml
+sources:
+  # ── 已验证可用的节点源 ─────────────────────────────────────────
+  - name: "zhuhaiuk-free"
+    url: "https://raw.githubusercontent.com/zhuhaiuk/free-nodes/main/clash_config.yaml"
+    type: yaml
+    enabled: true
+
+  - name: "au1rxx-US"
+    url: "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/by-country/clash-US.yaml"
+    type: yaml
+    enabled: true
+
+  - name: "au1rxx-TW"
+    url: "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/by-country/clash-TW.yaml"
+    type: yaml
+    enabled: true
+
+  - name: "au1rxx-HK"
+    url: "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/by-country/clash-HK.yaml"
+    type: yaml
+    enabled: true
+
+  - name: "au1rxx-JP"
+    url: "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/by-country/clash-JP.yaml"
+    type: yaml
+    enabled: true
+
+  - name: "au1rxx-SG"
+    url: "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/by-country/clash-SG.yaml"
+    type: yaml
+    enabled: true
