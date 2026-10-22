@@ -19,11 +19,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
       - name: Prepare sources
         run: |
           set -e
@@ -31,33 +26,19 @@ jobs:
             echo "${{ secrets.NODE_SOURCES }}" > sources.txt
             echo "Using NODE_SOURCES secret"
           else
-            echo "NODE_SOURCES not set, extracting from sources.yaml"
-            # Extract URLs from sources.yaml (one per line)
+            echo "Extracting URLs from sources.yaml"
             grep -E '^\s+url:' sources.yaml | sed 's/.*url: *//' | grep -v '^$' > sources.txt
           fi
           echo "=== sources.txt ==="
           cat sources.txt
           echo "=== source count: $(wc -l < sources.txt) ==="
 
-      - name: Install subconverter
+      - name: Generate nodes with subconverter (docker)
         run: |
           set -e
-          echo "Downloading subconverter..."
-          # Try latest release first, fallback to specific version
-          wget -q https://github.com/Humbertg/subconverter-ng/releases/latest/download/subconverter-linux.zip -O sub.zip || {
-            echo "Latest release failed, trying v1.7.1"
-            wget -q https://github.com/Humbertg/subconverter-ng/releases/download/v1.7.1/subconverter-linux.zip -O sub.zip
-          }
-          unzip -o sub.zip -d subconverter/
-          chmod +x subconverter/subconverter
-          ls -la subconverter/
-          echo "$GITHUB_WORKSPACE/subconverter" >> $GITHUB_PATH
-
-      - name: Generate nodes
-        run: |
-          set -e
-          echo "Running subconverter..."
-          subconverter -u sources.txt -o output.yaml -f Clash
+          echo "Running subconverter via docker..."
+          docker run --rm -v "$GITHUB_WORKSPACE:/data" tindy2013/subconverter:latest \
+            -u /data/sources.txt -o /data/output.yaml -f Clash
           echo "=== subconverter exit: $? ==="
           mkdir -p public
           cp output.yaml public/free-nodes.yaml
