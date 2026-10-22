@@ -1,12 +1,15 @@
-name: Deploy Subscription to Cloudflare Pages
+# .github/workflows/deploy.yml
+name: Build and Deploy
 
 on:
+  push:
+    branches: [main]
   schedule:
     - cron: '0 */6 * * *'
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 
@@ -15,43 +18,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          node-version: '20'
 
-      - name: Setup subconverter-ng
+      - name: Install subconverter
         run: |
-          curl -L -o subconverter https://github.com/Jungley8/subconverter-ng/releases/latest/download/subconverter-linux
-          chmod +x subconverter
+          wget -q https://github.com/Humbertg/subconverter-ng/releases/latest/download/subconverter-linux.zip -O sub.zip
+          unzip -o sub.zip -d subconverter/
+          chmod +x subconverter/subconverter
+          echo "$GITHUB_WORKSPACE/subconverter" >> $GITHUB_PATH
 
-      - name: Generate free-nodes.yaml
+      - name: Generate nodes
+        run: |
+          echo "${{ secrets.NODE_SOURCES }}" > sources.txt
+          subconverter -u sources.txt -o output.yaml -f Clash
+          mkdir -p public
+          cp output.yaml public/free-nodes.yaml
+
+      - name: Install wrangler
+        run: npm install -g wrangler
+
+      - name: Deploy to Cloudflare Pages
         env:
-          NODE_SOURCES: ${{ secrets.NODE_SOURCES }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
         run: |
-          echo "$NODE_SOURCES" > sources.txt
-          ./subconverter \
-            -sources sources.txt \
-            -output free-nodes.yaml \
-            -dedup -fdn \
-            -filter-protocol "vmess|vless|trojan|shadowsocks|hysteria2|tuic" \
-            -filter-country "US,JP,SG,HK,TW,DE,NL" \
-            -test-url "http://cp.cloudflare.com/generate_204" \
-            -test-timeout 3000 \
-            -max-latency 3000 \
-            -sort-by latency \
-            -top 50
-
-      - name: Deploy to Cloudflare Pages (主链路)
-        uses: cloudflare/pages-action@v1
-        with:
-          apiToken: ${{ secrets.CF_API_TOKEN }}
-          accountId: ${{ secrets.CF_ACCOUNT_ID }}
-          projectName: proxy-fetcher
-          directory: .
-
-      - name: Deploy to GitHub Pages (备链路)
-        if: always()
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: .
-          keep_files: false
+          wrangler pages deploy public \
+            --project-name node-sub \
+            --branch main
