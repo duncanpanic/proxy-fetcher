@@ -33,12 +33,21 @@ jobs:
           cat sources.txt
           echo "=== source count: $(wc -l < sources.txt) ==="
 
-      - name: Generate nodes with subconverter (docker)
+      - name: Download subconverter (prebuilt binary)
         run: |
           set -e
-          echo "Running subconverter via docker..."
-          docker run --rm -v "$GITHUB_WORKSPACE:/data" tindy2013/subconverter:latest \
-            -u /data/sources.txt -o /data/output.yaml -f Clash
+          # Use a specific known version that works
+          wget -q https://github.com/Humbertg/subconverter-ng/releases/download/v1.7.1/subconverter-linux.zip -O sub.zip
+          unzip -o sub.zip -d subconverter/
+          chmod +x subconverter/subconverter
+          ls -la subconverter/
+          ./subconverter/subconverter -h 2>&1 | head -5
+
+      - name: Generate nodes
+        run: |
+          set -e
+          echo "Running subconverter..."
+          ./subconverter/subconverter -u sources.txt -o output.yaml -f Clash
           echo "=== subconverter exit: $? ==="
           mkdir -p public
           cp output.yaml public/free-nodes.yaml
