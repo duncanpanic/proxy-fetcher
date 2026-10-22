@@ -27,33 +27,74 @@ jobs:
             echo "Using NODE_SOURCES secret"
           else
             echo "Extracting URLs from sources.yaml"
-            grep -E '^\s+url:' sources.yaml | sed 's/.*url: *//' | grep -v '^$' > sources.txt
+            # 提取后去掉可能存在的引号
+            grep -E '^\s+url:' sources.yaml | sed 's/.*url: *//' | tr -d '"' | grep -v '^$' > sources.txt
           fi
           echo "=== sources.txt ==="
           cat sources.txt
           echo "=== source count: $(wc -l < sources.txt) ==="
 
-      - name: Download subconverter (tindy2013 v0.9.0)
+      - name: Download and extract subconverter
         run: |
           set -e
           wget -q https://github.com/tindy2013/subconverter/releases/download/v0.9.0/subconverter_linux64.tar.gz -O sub.tar.gz
-          mkdir -p subconverter
-          tar -xzf sub.tar.gz -C subconverter/
+          # 直接解压到当前目录，tar 包内已包含 subconverter 文件夹
+          tar -xzf sub.tar.gz
+          # 正确路径：subconverter/subconverter
           chmod +x subconverter/subconverter
-          ls -la subconverter/
-          ./subconverter/subconverter -h 2>&1 | head -5
+          ./subconverter/subconverter -v
 
-      - name: Generate nodes
+      - name: Start subconverter service
         run: |
           set -e
-          echo "Running subconverter..."
-          ./subconverter/subconverter -u sources.txt -o output.yaml -f Clash
-          echo "=== subconverter exit: $? ==="
+          # 在后台启动服务，日志写入文件便于排查
+          ./subconverter/subconverter > subconverter.log 2>&1 &
+          # 等待服务端口就绪（最多 30 秒）
+          for i in {1..30}; do
+            if curl -s -o /dev/null http://127.0.0.1:25500; then
+              echo "subconverter 服务已就绪（第 ${i} 次检测成功）"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "subconverter 服务启动超时，日志如下："
+              cat subconverter.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: Generate merged Clash config via API
+        run: |
+          set -e
           mkdir -p public
-          cp output.yaml public/free-nodes.yaml
-          echo "=== output.yaml preview (first 40 lines) ==="
+
+          # 1. 将多个订阅链接用 "|" 拼接成一个字符串
+          #    参考: https://hub.docker.com/r/tindy2013/subconverter 的合并示例
+          SOURCES_JOINED=$(paste -sd'|' sources.txt)
+          echo "合并后的源（前 200 字符）: ${SOURCES_JOINED:0:200}..."
+
+          # 2. 对拼接后的字符串进行 URLEncode
+          ENCODED_URL=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$SOURCES_JOINED")
+
+          # 3. 调用 /sub API，target=clash 表示生成 Clash 配置
+          #    默认会加载 pref.ini 中的规则和分组
+          echo "正在调用 subconverter API..."
+          curl -sS --fail "http://127.0.0.1:25500/sub?target=clash&url=${ENCODED_URL}" -o public/free-nodes.yaml
+
+          # 4. 校验：文件非空，且包含 Clash 配置的关键字段
+          if [ ! -s public/free-nodes.yaml ]; then
+            echo "错误：生成的配置文件为空"
+            exit 1
+          fi
+          if ! grep -q "proxies:" public/free-nodes.yaml; then
+            echo "错误：生成的配置中未找到 proxies 字段"
+            head -50 public/free-nodes.yaml
+            exit 1
+          fi
+
+          echo "=== 生成成功，预览（前 40 行）==="
           head -40 public/free-nodes.yaml
-          echo "=== node count: $(grep -c 'name:' public/free-nodes.yaml 2>/dev/null || echo 0) ==="
+          echo "=== 节点数量估算（grep 'name:'）: $(grep -c 'name:' public/free-nodes.yaml 2>/dev/null || echo 0) ==="
 
       - name: Install wrangler
         run: npm install -g wrangler
