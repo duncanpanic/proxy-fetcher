@@ -1,0 +1,116 @@
+# mihomo config template (envsubst render)
+# 部署前修改 deploy.sh 顶部的 SUB_URL 和 MIHOMO_SECRET
+
+port: 7890
+socks-port: 7891
+mixed-port: 7892
+allow-lan: true
+bind-address: "0.0.0.0"
+mode: rule
+log-level: info
+ipv6: true
+
+dns:
+  enable: true
+  fake-ip-range: 198.18.0.1/16
+  default-nameserver: [223.5.5.5, 119.29.29.29]
+  nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+  fallback:
+    - https://dns.google/dns-query
+    - https://cloudflare-dns.com/dns-query
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+    ipcidr: [240.0.0.0/4]
+
+rule-providers:
+  direct:
+    type: http
+    behavior: classical
+    url: "https://cdn.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/direct.mrs"
+    interval: 86400
+    format: mrs
+  proxy:
+    type: http
+    behavior: classical
+    url: "https://cdn.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/proxy.mrs"
+    interval: 86400
+    format: mrs
+  telegram:
+    type: http
+    behavior: classical
+    url: "https://cdn.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/telegram.mrs"
+    interval: 86400
+    format: mrs
+  google:
+    type: http
+    behavior: classical
+    url: "https://cdn.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/google.mrs"
+    interval: 86400
+    format: mrs
+  openai:
+    type: http
+    behavior: classical
+    url: "https://cdn.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/openai.mrs"
+    interval: 86400
+    format: mrs
+  anthropic:
+    type: http
+    behavior: classical
+    url: "https://cdn.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/anthropic.mrs"
+    interval: 86400
+    format: mrs
+
+proxy-providers:
+  free-nodes:
+    type: http
+    url: "${SUB_URL:-https://node.lorcan.top/free-nodes.yaml}"
+    interval: 21600
+    health-check:
+      enable: true
+      url: http://cp.cloudflare.com/generate_204
+      interval: 300
+
+proxy-groups:
+  - name: "🤖 AI 服务"
+    type: url-test
+    url: "http://cp.cloudflare.com/generate_204"
+    interval: 300
+    timeout: 5000
+    tolerance: 150
+    lazy: true
+    use: [free-nodes]
+    filter: ".*(US|JP|SG|HK|TW).*"
+
+  - name: "📱 Telegram"
+    type: url-test
+    url: "http://cp.cloudflare.com/generate_204"
+    interval: 300
+    timeout: 5000
+    lazy: true
+    use: [free-nodes]
+
+  - name: "🌐 全球直连"
+    type: select
+    use: [free-nodes]
+
+  - name: "🛡️ 故障转移"
+    type: fallback
+    url: "http://cp.cloudflare.com/generate_204"
+    interval: 300
+    use: [free-nodes]
+
+rules:
+  - RULE-SET,openai,🤖 AI 服务
+  - RULE-SET,google,🤖 AI 服务
+  - RULE-SET,anthropic,🤖 AI 服务
+  - RULE-SET,telegram,📱 Telegram
+  - RULE-SET,direct,DIRECT
+  - RULE-SET,proxy,🛡️ 故障转移
+  - GEOIP,CN,DIRECT
+  - MATCH,🛡️ 故障转移
+
+external-controller: "127.0.0.1:9090"
+secret: "${MIHOMO_SECRET:-}"
