@@ -24,6 +24,7 @@ const fixture = `proxies:
   - {name: "🇭🇰 HK 香港", type: trojan, server: hk1.example.com, port: 443, password: p1}
   - {name: "🇺🇸 US 慢", type: ss, server: us2.example.com, port: 8388, cipher: aes-128-gcm, password: p2}
   - {name: "不支持的协议", type: magic, server: bad.example.com, port: 443}
+  - {name: "明文代理", type: socks5, server: plain.example.com, port: 1080}
 `;
 
 const srcPath = path.join(workDir, 'fixture-nodes.yaml');
@@ -35,6 +36,7 @@ fs.writeFileSync(sourcesPath, `sources:\n  - name: 本地假源\n    url: ${srcU
 
 const outClient = path.join(workDir, 'out', 'free-nodes.yaml');
 const outProvider = path.join(workDir, 'out', 'providers', 'free-nodes.yaml');
+const outPool = path.join(workDir, 'out', 'pool.yaml');
 
 // 假探测：us1 200ms、jp1 80ms、hk1 400ms、us2 1500ms（超 MAX_DELAY 应被丢掉）
 const DELAYS = {
@@ -55,12 +57,36 @@ async function fakeProbe(entries) {
     sourcesFile: sourcesPath,
     outClient,
     outProvider,
+    outPool,
     probe: fakeProbe,
   });
 
   assert.strictEqual(result.sourceCount, 1);
-  assert.strictEqual(result.rawCount, 6, '应解析出 6 个原始节点');
+  assert.strictEqual(result.rawCount, 7, '应解析出 7 个原始节点');
   assert.strictEqual(result.kept.length, 3, 'us2 延迟超阈值应被过滤');
+
+  // 候选池：未探测、已清洗（不支持的协议与明文代理都应被剔除）
+  const poolDoc = YAML.load(fs.readFileSync(outPool, 'utf8'));
+  assert.deepStrictEqual(Object.keys(poolDoc), ['proxies'], '候选池同样只能是 provider 格式');
+  assert.strictEqual(poolDoc.proxies.length, 4, '池内应保留 4 个去重节点（含未通过探测的 us2）');
+  assert.ok(
+    poolDoc.proxies.every((p) => p.type !== 'socks5'),
+    '池里不能出现明文代理'
+  );
+  assert.ok(
+    poolDoc.proxies.some((p) => p.server === 'us2.example.com'),
+    '候选池不受 MAX_DELAY 影响'
+  );
+  assert.deepStrictEqual(
+    poolDoc.proxies.map((p) => p.name),
+    ['🇺🇸US-001', '🇯🇵JP-001', '🇭🇰HK-001', '🇺🇸US-002'],
+    '池内命名按源顺序编号，不带延迟后缀'
+  );
+  assert.strictEqual(
+    poolDoc.proxies.find((p) => p.type === 'trojan').sni,
+    'hk1.example.com',
+    '池里的 trojan 节点必须带 sni'
+  );
 
   const providerDoc = YAML.load(fs.readFileSync(outProvider, 'utf8'));
   assert.deepStrictEqual(Object.keys(providerDoc), ['proxies'], 'provider 文件只能有 proxies');

@@ -235,5 +235,85 @@ test('空节点列表时不应崩，输出空 proxies', () => {
   assert.deepStrictEqual(doc, { proxies: [] });
 });
 
+console.log('\nSNI 字段名必须跟协议匹配（trojan/hy2/tuic 用 sni，vmess/vless 用 servername）');
+
+test('trojan: SNI 写进 sni 而不是 servername', () => {
+  const out = fetchLib.sanitizeNode({
+    name: 'HK-1',
+    type: 'trojan',
+    server: '1.2.3.4',
+    port: 443,
+    password: 'p',
+    sni: 'hk.example.com',
+  });
+  assert.strictEqual(out.sni, 'hk.example.com', 'trojan 的 SNI 必须落在 sni 字段');
+  assert.strictEqual(out.servername, undefined, 'trojan 写 servername 会被内核忽略');
+});
+
+test('hysteria2: 源里的 sni 不能被丢掉', () => {
+  const out = fetchLib.sanitizeNode({
+    name: 'JP-1',
+    type: 'hysteria2',
+    server: '5.6.7.8',
+    port: 443,
+    password: 'p',
+    sni: 'jp.example.com',
+    obfs: 'salamander',
+    'obfs-password': 'x',
+  });
+  assert.strictEqual(out.sni, 'jp.example.com');
+  assert.strictEqual(out.obfs, 'salamander', 'hy2 的 obfs 必须原样保留');
+  assert.strictEqual(out['obfs-password'], 'x');
+});
+
+test('tuic: SNI 写进 sni', () => {
+  const out = fetchLib.sanitizeNode({
+    name: 'SG-1',
+    type: 'tuic',
+    server: 'sg.example.com',
+    port: 443,
+    uuid: 'u',
+    password: 'p',
+  });
+  assert.strictEqual(out.sni, 'sg.example.com', 'server 是域名时应自动补 SNI');
+});
+
+test('vmess: SNI 仍然写 servername（两套字段不能混）', () => {
+  const out = fetchLib.sanitizeNode({
+    name: 'US-1',
+    type: 'vmess',
+    server: 'us.example.com',
+    port: 443,
+    uuid: 'u',
+    tls: true,
+  });
+  assert.strictEqual(out.servername, 'us.example.com');
+  assert.strictEqual(out.sni, undefined);
+});
+
+test('明文代理（socks5/http）默认不发布', () => {
+  const socks = fetchLib.sanitizeNode({
+    name: 'SS-1',
+    type: 'socks5',
+    server: '9.9.9.9',
+    port: 1080,
+    username: 'a',
+    password: 'b',
+  });
+  const plain = fetchLib.sanitizeNode({ name: 'HTTP-1', type: 'http', server: '9.9.9.9', port: 8080 });
+  assert.strictEqual(socks, null);
+  assert.strictEqual(plain, null);
+});
+
+test('ALLOW_PLAINTEXT=1 时才放行明文代理', () => {
+  const { CFG } = fetchLib;
+  const backup = CFG.allowPlaintext;
+  CFG.allowPlaintext = true;
+  const out = fetchLib.sanitizeNode({ name: 'SS-1', type: 'socks5', server: '9.9.9.9', port: 1080 });
+  CFG.allowPlaintext = backup;
+  assert.ok(out, '打开开关后应保留');
+  assert.strictEqual(out.type, 'socks5');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exitCode = 1;

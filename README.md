@@ -34,6 +34,36 @@ public/free-nodes.yaml                        public/providers/free-nodes.yaml
 现在只有第 3 种节点会被发布。筛选口径由 `PROBE_URL` / `PROBE_EXPECTED` 控制，默认
 `https://www.gstatic.com/generate_204` 期望 `204`。
 
+## 重要：探测视角决定一切
+
+「能不能连」这件事没有绝对答案，只有「从哪台机器连」。CI 跑在 GitHub Actions 的
+美国/欧洲机房，它判活的节点**只代表机房能连**。实测同一份 120 节点的产物：
+
+| 视角 | 通过 204 判定 | 说明 |
+| --- | --- | --- |
+| GitHub runner（美国） | 120/120，延迟 4–214 ms | 机房直连海外节点几乎无损耗 |
+| 国内家宽本机 | 6/120，可用者 214 ms+ | 大部分节点在你这边已被阻断 |
+
+所以架构是两段式的：
+
+- **CI 只负责抓源**（机房能访问 `raw.githubusercontent.com`，你本机往往不行），
+  清洗去重后发布候选池 `public/pool.yaml`（默认最多 800 个，**不探测**）；
+- **探测搬到本机**，用你自己的网络筛一遍：`node select-local.js`。
+
+```bash
+npm install js-yaml
+node select-local.js                       # 默认拉线上 pool.yaml，产物在 ./local/
+MIHOMO_BIN=/path/to/mihomo node select-local.js
+node select-local.js --pool ./pool.yaml --out ./local
+```
+
+产物 `local/nodes.yaml` 是完整配置，客户端直接导入即可，不依赖线上订阅。
+本机默认放宽到 `PROBE_TIMEOUT=5000`、`MAX_DELAY=2000`（家宽到境外本来就慢，
+沿用机房口径会把能用的节点全切掉）。
+
+`public/free-nodes.yaml` 仍按 CI 视角发布，作为「有总比没有强」的兜底，别拿它的
+延迟数字当自己网络的预期。
+
 ## 使用
 
 ```bash

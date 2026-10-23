@@ -127,7 +127,9 @@ proxy-groups:
     lazy: false
     expected-status: 204
     use: [free-nodes]
-    filter: "(?i)(US|JP|SG|HK|TW)"
+    # 不要再按节点名 filter 地区：免费源里大量节点没有地区词，名字会是 XX，
+    # filter 会把它们全部排除，最后组里只剩两三个节点（甚至为空）。
+    # 免费节点本来就都在境外，全量参与测速反而更稳。
 
   - name: "📱 Telegram"
     type: url-test

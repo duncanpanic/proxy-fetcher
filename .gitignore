@@ -8,3 +8,10 @@ package-lock.json
 .env
 public/providers/
 .cache/
+
+# 本机筛选产物
+local/
+
+# 诊断临时文件（本机内核、抓下来的样本）
+.diag/
+public/pool.yaml

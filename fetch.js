@@ -34,6 +34,7 @@ const SRC_FILE = path.join(ROOT, 'sources.yaml');
 const OUT_DIR = path.join(ROOT, 'public');
 const OUT_CLIENT = path.join(OUT_DIR, 'free-nodes.yaml');
 const OUT_PROVIDER = path.join(OUT_DIR, 'providers', 'free-nodes.yaml');
+const OUT_POOL = path.join(OUT_DIR, 'pool.yaml');
 
 const UA =
   'Mozilla/5.0 (compatible; proxy-fetcher/2.0; +https://github.com/duncanpanic/proxy-fetcher)';
@@ -58,6 +59,9 @@ const CFG = {
   probeUrl: process.env.PROBE_URL || 'https://www.gstatic.com/generate_204',
   probeExpected: process.env.PROBE_EXPECTED || '204',
   mihomoBin: process.env.MIHOMO_BIN || '',
+  // 候选池：不经过探测的干净节点，供本机按自己的网络再筛一遍
+  poolLimit: envNum('POOL_LIMIT', 800),
+  allowPlaintext: process.env.ALLOW_PLAINTEXT === '1',
 };
 
 function log(msg) {
@@ -218,6 +222,12 @@ const SUPPORTED_TYPES = new Set([
 // 只能走 UDP 的协议，没法用 TCP 握手判断存活
 const UDP_ONLY_TYPES = new Set(['hysteria', 'hysteria2', 'tuic', 'wireguard']);
 
+// 明文代理：免费源里的 http/socks5 绝大多数是失效的开放代理，默认不发布
+const PLAINTEXT_TYPES = new Set(['socks5', 'http']);
+
+// mihomo 里这些协议的 SNI 字段叫 sni；vmess/vless 才叫 servername
+const SNI_FIELD_TYPES = new Set(['trojan', 'hysteria', 'hysteria2', 'tuic']);
+
 const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
 const DOMAIN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
 
@@ -269,16 +279,24 @@ function sanitizeNode(node) {
 
   const out = { ...node, type, server, port };
 
+  // 明文代理默认不发布（可用 ALLOW_PLAINTEXT=1 放行）
+  if (PLAINTEXT_TYPES.has(type) && !CFG.allowPlaintext) return null;
+
   // 免费节点证书普遍不规范，统一放宽（只对走 TLS 的协议有意义）
   delete out.skipCertVerify;
   delete out.sni;
+  delete out.servername;
 
   const tlsOk = hasTLS(node, type);
   if (tlsOk) {
     out['skip-cert-verify'] = true;
-    const sn = normalizeSni(node.servername) || normalizeSni(server);
-    if (sn) out.servername = sn;
-    else delete out.servername;
+    // SNI 字段名跟协议绑定：trojan/hysteria2/tuic 认 sni，vmess/vless 认 servername。
+    // 旧版一律写 servername 并先 delete 掉 sni，等于把 hy2/trojan 的 SNI 弄丢了。
+    const sn = normalizeSni(node.sni) || normalizeSni(node.servername) || normalizeSni(server);
+    if (sn) {
+      if (SNI_FIELD_TYPES.has(type)) out.sni = sn;
+      else out.servername = sn;
+    }
 
     // uTLS 指纹，降低被指纹识别拦掉的概率
     if (!out['client-fingerprint'] && (type === 'vmess' || type === 'vless' || type === 'trojan')) {
@@ -286,7 +304,6 @@ function sanitizeNode(node) {
     }
   } else {
     delete out['skip-cert-verify'];
-    delete out.servername;
   }
 
   out.udp = true;
@@ -743,6 +760,19 @@ async function runPipeline(opts = {}) {
   const uniq = dedupe(entries);
   log(`规范化后: ${entries.length}，去重后: ${uniq.length}`);
 
+  // 候选池：清洗去重后、未经探测的全量节点。
+  // 探测结果只反映执行机器的网络位置（CI runner 在境外，与你本机视角差异极大），
+  // 所以额外发布一份候选池，供本机用 select-local.js 按自己的网络重新筛选。
+  const poolSlice = uniq.slice(0, CFG.poolLimit);
+  const poolNames = nameNodes(poolSlice.map((item) => ({ region: item.region, delay: NaN })));
+  const poolProxies = poolSlice.map((item, i) => ({ ...item.proxy, name: poolNames[i] }));
+  writeYaml(
+    opts.outPool || OUT_POOL,
+    buildProviderDoc(poolProxies),
+    `# candidate pool · ${poolProxies.length} nodes · unprobed\n# 本机执行 node select-local.js 可基于自己的网络重新筛选`
+  );
+  log(`候选池: ${poolProxies.length} 个（未探测）`);
+
   const probed = await probe(uniq);
   log(`通过真实探测: ${probed.length}`);
 
@@ -794,6 +824,7 @@ module.exports = {
   SRC_FILE,
   OUT_CLIENT,
   OUT_PROVIDER,
+  OUT_POOL,
   fetchText,
   loadSources,
   parseProxyPayload,
