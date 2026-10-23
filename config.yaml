@@ -1,4 +1,5 @@
-# mihomo config template (envsubst render)
+# mihomo 服务端配置模板
+# 部署时由 deploy.sh 用 envsubst 渲染，只替换 ${SUB_URL} 和 ${MIHOMO_SECRET} 两个变量
 port: 7890
 socks-port: 7891
 mixed-port: 7892
@@ -6,11 +7,39 @@ allow-lan: true
 bind-address: "0.0.0.0"
 mode: rule
 log-level: info
-ipv6: true
+# 免费节点里 IPv6 通道大多不可用，开着会拖慢 DNS 解析与连接回退
+ipv6: false
+
+# 让面板可达（不是 127.0.0.1，否则 SSH 隧道之外打不开）
+external-controller: "0.0.0.0:9090"
+# 修正：envsubst 不支持 ${VAR:-默认值} 语法，写默认值会被原样输出成密钥；
+# 一律由 deploy.sh 导出真实值
+secret: "${MIHOMO_SECRET}"
+
+# 延迟统计口径统一（扣除握手差异），开关后测速结果才可横向比较
+unified-delay: true
+tcp-concurrent: true
+find-process-mode: "off"
+
+# 记住手动选择的节点与 fake-ip 映射，重启后不漂移
+profile:
+  store-selected: true
+  store-fake-ip: true
 
 dns:
   enable: true
+  ipv6: false
+  enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.1/16
+  # 这些域名必须走真实 DNS，否则联网检测/内网域名会异常
+  fake-ip-filter:
+    - "*.lan"
+    - "*.local"
+    - "+.msftconnecttest.com"
+    - "+.msftncsi.com"
+    - "time.*.com"
+    - "+.pool.ntp.org"
+    - "stun.*.*"
   default-nameserver: [223.5.5.5, 119.29.29.29]
   nameserver:
     - https://dns.alidns.com/dns-query
@@ -23,82 +52,109 @@ dns:
     geoip-code: CN
     ipcidr: [240.0.0.0/4]
 
+# 规则集：cdn.jsdelivr.net 在国内常被污染，换成官方文档用的 testingcf 镜像
 rule-providers:
   direct:
     type: http
-    behavior: domain # 修正：mrs 不支持 classical
-    url: "https://cdn.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/direct.mrs"
+    behavior: domain
+    url: "https://testingcf.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/direct.mrs"
     interval: 86400
     format: mrs
   proxy:
     type: http
     behavior: domain
-    url: "https://cdn.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/proxy.mrs"
+    url: "https://testingcf.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/proxy.mrs"
     interval: 86400
     format: mrs
   telegram:
     type: http
     behavior: domain
-    url: "https://cdn.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/telegram.mrs"
+    url: "https://testingcf.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/telegram.mrs"
     interval: 86400
     format: mrs
   google:
     type: http
     behavior: domain
-    url: "https://cdn.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/google.mrs"
+    url: "https://testingcf.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/google.mrs"
     interval: 86400
     format: mrs
   openai:
     type: http
     behavior: domain
-    url: "https://cdn.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/openai.mrs"
+    url: "https://testingcf.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/openai.mrs"
     interval: 86400
     format: mrs
   anthropic:
     type: http
     behavior: domain
-    url: "https://cdn.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/anthropic.mrs"
+    url: "https://testingcf.jsdelivr.net/gh/CRThu/clash-rules-mrs@main/mihomo/anthropic.mrs"
     interval: 86400
     format: mrs
 
+# 免费节点订阅：指向 fetch.js 产出的「只有 proxies:」的文件
 proxy-providers:
   free-nodes:
     type: http
-    url: "https://node.lorcan.top/free-nodes.yaml" # 你的最终订阅链接
+    url: "${SUB_URL}"
+    path: ./providers/free-nodes.yaml
     interval: 21600
+    # 真实可用性闸门：必须经节点访问 generate_204 拿到 204 才算活
+    # lazy 默认 true —— 节点没被用到就永不体检，等于没有闸门
     health-check:
       enable: true
-      url: http://www.gstatic.com/generate_204 # 修正：更稳定的健康检查地址
+      url: https://www.gstatic.com/generate_204
       interval: 300
+      timeout: 3000
+      lazy: false
+      expected-status: 204
+    # 兜底修正：源里字段名写错或缺失时，在这里统一补齐
+    override:
+      udp: true
+      skip-cert-verify: true
+      client-fingerprint: chrome
+    # 只收主流地区，其余节点留在订阅里但不进组
+    filter: "(?i)(US|JP|SG|HK|TW|KR)"
 
 proxy-groups:
+  # 用 use: 的组不会自己测速（官方文档：只测 proxies 字段），
+  # 真实测速来自上面 provider 的 health-check，这里的 url/interval 仅作兜底
   - name: "🤖 AI 服务"
     type: url-test
-    url: "http://www.gstatic.com/generate_204"
+    url: "https://www.gstatic.com/generate_204"
     interval: 300
-    timeout: 5000
-    tolerance: 150
-    lazy: true
+    timeout: 3000
+    tolerance: 120
+    lazy: false
+    expected-status: 204
     use: [free-nodes]
-    filter: ".*(US|JP|SG|HK|TW).*"
+    filter: "(?i)(US|JP|SG|HK|TW)"
 
   - name: "📱 Telegram"
     type: url-test
-    url: "http://www.gstatic.com/generate_204"
+    url: "https://www.gstatic.com/generate_204"
     interval: 300
-    timeout: 5000
-    lazy: true
+    timeout: 3000
+    tolerance: 120
+    lazy: false
+    expected-status: 204
     use: [free-nodes]
 
   - name: "🌐 全球直连"
     type: select
     use: [free-nodes]
 
+  # 由 fallback 改为 url-test：fallback 只保证「第一个活着」，不挑最快
   - name: "🛡️ 故障转移"
-    type: fallback
-    url: "http://www.gstatic.com/generate_204"
+    type: url-test
+    url: "https://www.gstatic.com/generate_204"
     interval: 300
+    timeout: 3000
+    tolerance: 80
+    lazy: false
+    expected-status: 204
     use: [free-nodes]
+    # 订阅为空时宁可拒绝也不裸奔直连
+    empty-fallback: REJECT-DROP
 
 rules:
   - RULE-SET,openai,🤖 AI 服务
@@ -107,8 +163,5 @@ rules:
   - RULE-SET,telegram,📱 Telegram
   - RULE-SET,direct,DIRECT
   - RULE-SET,proxy,🛡️ 故障转移
-  - GEOIP,CN,DIRECT
+  - GEOIP,CN,DIRECT,no-resolve
   - MATCH,🛡️ 故障转移
-
-external-controller: "127.0.0.1:9090"
-secret: "${MIHOMO_SECRET:-}"

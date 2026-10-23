@@ -12,9 +12,15 @@ permissions:
   pages: write
   id-token: write
 
+# 定时任务与手动触发不要叠在一起跑，否则两次部署互相覆盖
+concurrency:
+  group: pages-deploy
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -26,18 +32,62 @@ jobs:
       - name: Install dependencies
         run: npm install js-yaml
 
-      - name: Run Fetch Script to filter alive nodes
+      - name: Run logic tests
         run: |
-          mkdir -p public
-          node fetch.js
+          node test/logic.test.js
+          node test/pipeline.test.js
+          node test/config.test.js
+
+      # 有内核才能做「经节点访问 204」的真实探测；下载失败时脚本会自动降级
+      - name: Setup mihomo core (real probe)
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          VERSION="$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
+            | grep -oP '"tag_name":\s*"\K[^"]+' || true)"
+          VERSION="${VERSION:-v1.19.32}"
+          echo "mihomo ${VERSION}"
+          for asset in "mihomo-linux-amd64-compatible-${VERSION}.gz" "mihomo-linux-amd64-${VERSION}.gz"; do
+            if curl -fsSL --retry 3 --retry-delay 2 -o mihomo.gz \
+              "https://github.com/MetaCubeX/mihomo/releases/download/${VERSION}/${asset}"; then
+              gunzip -f mihomo.gz && chmod +x mihomo && ./mihomo -v && exit 0
+            fi
+          done
+          echo "::warning::mihomo 下载失败，本次降级为 TCP/TLS 握手探测"
+          exit 1
+
+      - name: Fetch & filter nodes
+        env:
+          MIHOMO_BIN: ./mihomo
+          MAX_NODES: '120'
+          MAX_DELAY: '800'
+          PROBE_TIMEOUT: '3000'
+          PROBE_DEADLINE: '300000'
+        run: node fetch.js
 
       - name: Check output
         run: |
-          if [ ! -s public/free-nodes.yaml ]; then
-            echo "错误：fetch.js 没有生成文件或文件为空"
+          for f in public/free-nodes.yaml public/providers/free-nodes.yaml; do
+            if [ ! -s "$f" ]; then
+              echo "::error::缺少产物 $f"
+              exit 1
+            fi
+          done
+          count="$(grep -c 'name:' public/providers/free-nodes.yaml || echo 0)"
+          echo "=== 节点数量: ${count} ==="
+          if [ "${count}" -lt 1 ]; then
+            echo "::error::没有任何节点通过探测"
             exit 1
           fi
-          echo "=== 存活节点数量: $(grep -c 'name:' public/free-nodes.yaml || echo 0) ==="
+          head -c 400 public/free-nodes.yaml
+
+      - name: Upload artifacts (debug)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: free-nodes-${{ github.run_id }}
+          path: public/
+          retention-days: 1
 
       - name: Install wrangler
         run: npm install -g wrangler

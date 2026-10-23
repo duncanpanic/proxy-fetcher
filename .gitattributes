@@ -1,0 +1,5 @@
+# 仓库内统一 LF：deploy.sh 在 Linux 上执行，CRLF 会让 shebang 失效
+* text=auto eol=lf
+*.gz binary
+*.png binary
+*.ico binary
