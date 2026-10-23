@@ -94,13 +94,15 @@ async function fakeProbe(entries) {
   const poolJson = JSON.parse(fs.readFileSync(outPoolJson, 'utf8'));
   assert.deepStrictEqual(
     Object.keys(poolJson).sort(),
-    ['count', 'generated', 'probeExpected', 'probeUrl', 'proxies'],
+    ['count', 'generated', 'origins', 'probeExpected', 'probeUrl', 'proxies'],
     'pool.json 字段固定'
   );
   assert.strictEqual(poolJson.count, 4);
   assert.strictEqual(poolJson.probeExpected, '204');
   assert.ok(/^\d{4}-\d{2}-\d{2}T/.test(poolJson.generated), 'pool.json 需要生成时间');
   assert.strictEqual(poolJson.proxies.length, 4);
+  assert.strictEqual(poolJson.origins.length, 4, 'origins 要与 proxies 一一对应');
+  assert.ok(poolJson.origins.every((x) => typeof x === 'string' && x.length > 0), 'origins 需要来源名');
   assert.deepStrictEqual(
     poolJson.proxies.map((p) => p.name),
     poolDoc.proxies.map((p) => p.name),

@@ -142,6 +142,7 @@ powershell -ExecutionPolicy Bypass -File tools\local-probe.ps1 `
 | `-ExpectedStatus` | `204` | 期望状态码 |
 | `-Force` | — | 强制重新下载内核 |
 | `-AllowPlaintext` | — | 允许 socks5/http 明文代理（默认剔除） |
+| `-Rounds` | `2` | 复测轮次：>1 时对候选再测一遍，只留两轮都通的（`1` 关闭） |
 
 产物 `local\nodes.yaml` 是一份完整配置（含 DNS、`节点选择`/`自动选择` 两组），在客户端里
 「配置 → 导入本地文件」选中它就能用。跑完会调 `mihomo -t` 自校验，校验不过会直接报错。

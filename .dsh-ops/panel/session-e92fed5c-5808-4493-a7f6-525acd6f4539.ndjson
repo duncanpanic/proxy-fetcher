@@ -1,0 +1,4 @@
+{"record":"open","sessionId":"session-e92fed5c-5808-4493-a7f6-525acd6f4539","cwd":"E:\\github\\dsh","at":"2026-10-23T07:10:06.935Z"}
+{"record":"event","seq":2553,"time":1792739406933,"type":"assistant/attempt"}
+{"record":"event","seq":2554,"time":1792739406934,"type":"llm/retry"}
+{"record":"event","seq":2555,"time":1792739407396,"type":"llm/retry-started"}

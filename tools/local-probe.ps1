@@ -65,7 +65,8 @@ param(
   [string]$TestUrl = 'https://cp.cloudflare.com/generate_204',
   [int]$ExpectedStatus = 204,
   [switch]$Force,
-  [switch]$AllowPlaintext
+  [switch]$AllowPlaintext,
+  [int]$Rounds = 2
 )
 
 # 注意：$Pool 是 [string] 类型约束的参数，直接向它赋值数组会被强制拼成一行空格，
@@ -188,6 +189,13 @@ function Get-Pool {
   if (-not $raw -or -not $raw.proxies) { throw '候选池格式不对（需要 { proxies: [...] }）' }
   $list = @($raw.proxies)
   if ($list.Count -eq 0) { throw '候选池是空的' }
+
+  # pool.json 的 origins 与 proxies 一一对应，用来按源统计通过率
+  $script:PoolOrigins = @()
+  $origProp = $raw.PSObject.Properties['origins']
+  if ($origProp -and $origProp.Value) { $script:PoolOrigins = @($origProp.Value) }
+  if ($script:PoolOrigins.Count -ne $list.Count) { $script:PoolOrigins = @() }
+
   Write-Ok "池内节点：$($list.Count) 个"
   return $list
 }
@@ -203,7 +211,7 @@ function Get-FreePort {
   return $port
 }
 
-function Start-ProbeCore($proxies, $workDir, $ctrlPort) {
+function Start-ProbeCore($proxies, $workDir, $ctrlPort, $origins) {
   $cfgPath = Join-Path $workDir 'probe.json'
 
   # 节点名统一改成 p0..pN，避免重名 / 特殊字符导致内核拒绝
@@ -230,7 +238,9 @@ function Start-ProbeCore($proxies, $workDir, $ctrlPort) {
       }
     }
     $named += $copy
-    $map += [pscustomobject]@{ Index = $i; Alias = "p$i"; Orig = $origName; Type = [string]$copy['type']; Server = [string]$copy['server']; Port = $copy['port'] }
+    $origin = '(unknown)'
+    if ($origins -and $origins.Count -gt $i -and $origins[$i]) { $origin = [string]$origins[$i] }
+    $map += [pscustomobject]@{ Index = $i; Alias = "p$i"; Orig = $origName; Origin = $origin; Type = [string]$copy['type']; Server = [string]$copy['server']; Port = $copy['port'] }
   }
 
   $cfg = [ordered]@{
@@ -491,54 +501,97 @@ try {
 
   # 明文代理（socks5/bash 转发类）在 mihomo 里就是一行密码，任何人不经认证就能用；
   # 除非你明确要，否则不进产物。
+  $poolOrigins = @($script:PoolOrigins)
   $plainTypes = @('socks5', 'http')
   if (-not $AllowPlaintext) {
-    $before = $nodes.Count
-    $nodes = @($nodes | Where-Object {
-      $tp = $_.PSObject.Properties['type']
-      -not ($tp -and ($plainTypes -contains ([string]$tp.Value)))
-    })
-    if ($nodes.Count -ne $before) {
-      Write-Warn2 "跳过 $($before - $nodes.Count) 个明文代理（socks5/http），需要请加 -AllowPlaintext"
+    $keptNodes = @()
+    $keptOrigins = @()
+    $skipped = 0
+    for ($i = 0; $i -lt $nodes.Count; $i++) {
+      $tp = $nodes[$i].PSObject.Properties['type']
+      if ($tp -and ($plainTypes -contains ([string]$tp.Value))) { $skipped++; continue }
+      $keptNodes += $nodes[$i]
+      if ($i -lt $poolOrigins.Count) { $keptOrigins += [string]$poolOrigins[$i] } else { $keptOrigins += '(unknown)' }
     }
+    if ($skipped -gt 0) {
+      Write-Warn2 "跳过 $skipped 个明文代理（socks5/http），需要请加 -AllowPlaintext"
+    }
+    $nodes = $keptNodes
+    $poolOrigins = $keptOrigins
   }
+  $skippedPlain = $script:PoolOrigins.Count - $nodes.Count
   if ($nodes.Count -eq 0) { throw '过滤后没有可探测的节点' }
 
   $ctrlPort = Get-FreePort
   Write-Step "启动临时内核（控制端口 $ctrlPort）…"
-  $core = Start-ProbeCore -proxies $nodes -workDir $workDir -ctrlPort $ctrlPort
+  $core = Start-ProbeCore -proxies $nodes -workDir $workDir -ctrlPort $ctrlPort -origins $poolOrigins
   Write-Ok "内核就绪"
 
   Write-Step "本机并发探测（并发 $Concurrency，超时 ${Timeout}ms，目标 $TestUrl）…"
   $delays = Invoke-Probe -map $core.Map -ctrlPort $ctrlPort
 
-  # 探测结束就先关掉内核：后面 mihomo -t 校验要读同一个目录里的 geo 数据，内核不退出会锁文件
+  # 第一轮：能连 + 阈值内
+  $passMap = @{}
+  $ok = @()
+  foreach ($item in $core.Map) {
+    $d = $delays[$item.Index]
+    if ($null -eq $d) { $d = -1 }
+    if ($d -gt 0) { $passMap[$item.Index] = $d }
+    if ($d -gt 0 -and ($MaxDelay -le 0 -or $d -le $MaxDelay)) {
+      $ok += [pscustomobject]@{ Delay = $d; Map = $item }
+    }
+  }
+  $passCount = $passMap.Count
+  $ok = @($ok | Sort-Object Delay)
+  $within = $ok.Count
+  $cand = @()
+
+  # 第二轮：免费节点「探得通、真连不上」太常见，单轮结果不可信。
+  # 第一轮按阈值筛完，取前 Top*2 个再测一遍，两轮都过才留下。
+  if ($Rounds -gt 1 -and $ok.Count -gt 0) {
+    $slots = $ok.Count
+    if ($Top -gt 0 -and $slots -gt $Top * 2) { $slots = $Top * 2 }
+    $cand = @($ok[0..($slots - 1)])
+    Write-Step "复测第二轮（$($cand.Count) 个候选，只留两轮都通的）…"
+    $delays2 = Invoke-Probe -map @($cand | ForEach-Object { $_.Map }) -ctrlPort $ctrlPort
+    $kept = @()
+    foreach ($entry in $cand) {
+      $d2 = $delays2[$entry.Map.Index]
+      if ($null -eq $d2) { $d2 = -1 }
+      if ($d2 -gt 0 -and ($MaxDelay -le 0 -or $d2 -le $MaxDelay)) {
+        $kept += [pscustomobject]@{ Delay = $d2; Delay1 = $entry.Delay; Map = $entry.Map }
+      }
+    }
+    $ok = @($kept | Sort-Object Delay)
+  } else {
+    $cand = @($ok)
+    foreach ($entry in $ok) {
+      $entry | Add-Member -NotePropertyName Delay1 -NotePropertyValue $entry.Delay -Force
+    }
+  }
+
+  # 探测结束再关内核：后面 mihomo -t 校验要读同一个目录里的 geo 数据，内核不退出会锁文件
   if ($core -and $core.Proc -and -not $core.Proc.HasExited) {
     try { Stop-Process -Id $core.Proc.Id -Force -ErrorAction SilentlyContinue } catch { }
     Start-Sleep -Milliseconds 400
   }
 
-  # 汇总
-  $ok = @()
-  foreach ($item in $core.Map) {
-    $d = $delays[$item.Index]
-    if ($null -eq $d) { $d = -1 }
-    if ($d -gt 0) {
-      if ($MaxDelay -le 0 -or $d -le $MaxDelay) {
-        $ok += [pscustomobject]@{ Delay = $d; Map = $item }
-      }
-    }
-  }
-  $ok = @($ok | Sort-Object Delay)
   if ($Top -gt 0 -and $ok.Count -gt $Top) { $ok = @($ok[0..($Top - 1)]) }
+  if ($ok.Count -eq 0) {
+    if ($within -gt 0) { throw '第一轮能连、第二轮全部失败，节点太不稳定，稍后重跑一次' }
+    throw '没有任何节点可用，检查网络或换候选池'
+  }
 
   Write-Host ''
-  $passCount = @($core.Map | Where-Object { $delays[$_.Index] -gt 0 }).Count
-  Write-Ok ("探测结果：$($core.Map.Count) 个节点，能连 $passCount 个，符合阈值 $($ok.Count) 个")
-  if ($passCount -gt 0 -and $ok.Count -eq 0) {
+  $stage = "池内 $($core.Map.Count) 个"
+  if ($skippedPlain -gt 0) { $stage += "（跳过 $skippedPlain 个明文代理）" }
+  Write-Ok ("$stage，能连 $passCount 个，阈值内 $within 个，复测保留 $($ok.Count) 个")
+  if ($passCount -gt 0 -and $within -eq 0) {
     Write-Warn2 "能连但都超过 MaxDelay=$MaxDelay ms，建议加大阈值（如 -MaxDelay 3000）"
   }
-  if ($ok.Count -eq 0) { throw '没有任何节点可用，检查网络或换候选池' }
+  if ($within -gt $ok.Count) {
+    Write-Warn2 ("有 $($within - $ok.Count) 个第一轮通过、第二轮失败，已剔除（免费节点常态）")
+  }
 
   # 重命名 + 组装配置
   $counter = @{}
@@ -643,13 +696,49 @@ try {
   $lines = @(
     "本机测速报告  $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
     "探测目标: $TestUrl  |  超时: ${Timeout}ms  |  延迟阈值: ${MaxDelay}ms",
-    "池内 $($core.Map.Count) 个，能连 $passCount 个，保留 $($finalProxies.Count) 个",
+    "池内 $($core.Map.Count) 个（跳过 $skippedPlain 个明文代理）→ 能连 $passCount 个 → 阈值内 $within 个 → 复测保留 $($finalProxies.Count) 个",
+    "复测轮次: $Rounds  |  候选: $($cand.Count) 个",
     '',
     ('{0,-8} {1,-26} {2,-10} {3}' -f '延迟', '名称', '类型', '服务器')
   )
   foreach ($r in $rows) {
     $lines += ('{0,-8} {1,-26} {2,-10} {3}' -f ("$($r.Delay)ms"), $r.Name, $r.Type, $r.Server)
   }
+  # 按源统计：知道哪个源在掺垃圾，比总体通过率有用得多
+  $originByIndex = @{}
+  foreach ($m in $core.Map) { $originByIndex[$m.Index] = $m.Origin }
+  $totalByOrigin = @{}
+  foreach ($o in $poolOrigins) {
+    if ($totalByOrigin.ContainsKey([string]$o)) { $totalByOrigin[[string]$o]++ } else { $totalByOrigin[[string]$o] = 1 }
+  }
+  $passByOrigin = @{}
+  foreach ($k in $passMap.Keys) {
+    $o = [string]$originByIndex[$k]
+    if ($passByOrigin.ContainsKey($o)) { $passByOrigin[$o]++ } else { $passByOrigin[$o] = 1 }
+  }
+  $keptByOrigin = @{}
+  foreach ($e in $ok) {
+    $o = [string]$e.Map.Origin
+    if ($keptByOrigin.ContainsKey($o)) { $keptByOrigin[$o]++ } else { $keptByOrigin[$o] = 1 }
+  }
+
+  $srcRows = @()
+  foreach ($o in $totalByOrigin.Keys) {
+    $t = [int]$totalByOrigin[$o]
+    $pv = 0
+    if ($passByOrigin.ContainsKey($o)) { $pv = [int]$passByOrigin[$o] }
+    $kv = 0
+    if ($keptByOrigin.ContainsKey($o)) { $kv = [int]$keptByOrigin[$o] }
+    $srcRows += [pscustomobject]@{ Source = $o; Total = $t; Pass = $pv; Kept = $kv; Rate = $(if ($t -gt 0) { [Math]::Round(100.0 * $pv / $t, 1) } else { 0 }) }
+  }
+  $srcRows = @($srcRows | Sort-Object -Property @{ Expression = 'Kept'; Descending = $true }, @{ Expression = 'Pass'; Descending = $true })
+
+  $lines += ''
+  $lines += ('{0,-40} {1,12} {2,8} {3,8}' -f '源', '通过/总数', '保留', '通过率')
+  foreach ($sr in $srcRows) {
+    $lines += ('{0,-40} {1,12} {2,8} {3,8}' -f $sr.Source, "$($sr.Pass)/$($sr.Total)", $sr.Kept, "$($sr.Rate)%")
+  }
+
   [IO.File]::WriteAllLines($reportPath, $lines, (New-Object System.Text.UTF8Encoding($false)))
 
   Write-Host ''
@@ -658,6 +747,13 @@ try {
     Write-Host ('{0,-8} {1,-26} {2,-10} {3}' -f ("$($r.Delay)ms"), $r.Name, $r.Type, $r.Server)
   }
   if ($rows.Count -gt 15) { Write-Host "  … 其余 $($rows.Count - 15) 个见报告" -ForegroundColor DarkGray }
+
+  Write-Host ''
+  Write-Host ('{0,-36} {1,12} {2,8}' -f '源', '通过/总数', '通过率') -ForegroundColor DarkGray
+  foreach ($sr in ($srcRows | Select-Object -First 10)) {
+    Write-Host ('{0,-36} {1,12} {2,8}' -f $sr.Source, "$($sr.Pass)/$($sr.Total)", "$($sr.Rate)%")
+  }
+  if ($srcRows.Count -gt 10) { Write-Host "  … 其余 $($srcRows.Count - 10) 个源见报告" -ForegroundColor DarkGray }
 
   Write-Host ''
   Write-Ok "配置已生成：$outFile"

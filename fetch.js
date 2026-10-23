@@ -1079,6 +1079,15 @@ async function runPipeline(opts = {}) {
   const poolSlice = uniq.slice(0, CFG.poolLimit);
   const poolNames = nameNodes(poolSlice.map((item) => ({ region: item.region, delay: NaN })));
   const poolProxies = poolSlice.map((item, i) => ({ ...item.proxy, name: poolNames[i] }));
+
+  const sourceStats = new Map();
+  for (const item of poolSlice) sourceStats.set(item.source, (sourceStats.get(item.source) || 0) + 1);
+  log(
+    `池内来源: ${[...sourceStats.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => `${k}:${v}`)
+      .join(' ')}`
+  );
   writeYaml(
     opts.outPool || OUT_POOL,
     buildProviderDoc(poolProxies),
@@ -1090,6 +1099,8 @@ async function runPipeline(opts = {}) {
     probeUrl: CFG.probeUrl,
     probeExpected: CFG.probeExpected,
     proxies: poolProxies,
+    // 与 proxies 一一对应的来源名：本机工具据此统计「每个源能连几个 / 共几个」
+    origins: poolSlice.map((item) => item.source),
   });
   log(`候选池: ${poolProxies.length} 个（未探测）`);
 
