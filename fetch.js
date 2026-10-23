@@ -35,6 +35,7 @@ const OUT_DIR = path.join(ROOT, 'public');
 const OUT_CLIENT = path.join(OUT_DIR, 'free-nodes.yaml');
 const OUT_PROVIDER = path.join(OUT_DIR, 'providers', 'free-nodes.yaml');
 const OUT_POOL = path.join(OUT_DIR, 'pool.yaml');
+const OUT_POOL_JSON = path.join(OUT_DIR, 'pool.json');
 
 const UA =
   'Mozilla/5.0 (compatible; proxy-fetcher/2.0; +https://github.com/duncanpanic/proxy-fetcher)';
@@ -692,6 +693,16 @@ function writeYaml(file, doc, header) {
   fs.writeFileSync(file, `${header}\n${body}`, 'utf8');
 }
 
+/**
+ * 同一份候选池再写一份 JSON。
+ * 目的：Windows 上的本机测速脚本（tools\本机测速.ps1）不必为了读 YAML 去装 Node
+ * 或 js-yaml —— PowerShell 原生就能解析 JSON。
+ */
+function writeJson(file, doc) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(doc), 'utf8');
+}
+
 // ---------------------------------------------------------------------------
 // 主流程
 // ---------------------------------------------------------------------------
@@ -771,6 +782,13 @@ async function runPipeline(opts = {}) {
     buildProviderDoc(poolProxies),
     `# candidate pool · ${poolProxies.length} nodes · unprobed\n# 本机执行 node select-local.js 可基于自己的网络重新筛选`
   );
+  writeJson(opts.outPoolJson || OUT_POOL_JSON, {
+    generated: new Date().toISOString(),
+    count: poolProxies.length,
+    probeUrl: CFG.probeUrl,
+    probeExpected: CFG.probeExpected,
+    proxies: poolProxies,
+  });
   log(`候选池: ${poolProxies.length} 个（未探测）`);
 
   const probed = await probe(uniq);
@@ -825,6 +843,7 @@ module.exports = {
   OUT_CLIENT,
   OUT_PROVIDER,
   OUT_POOL,
+  OUT_POOL_JSON,
   fetchText,
   loadSources,
   parseProxyPayload,

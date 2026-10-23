@@ -79,6 +79,14 @@ jobs:
             echo "::error::没有任何节点通过探测"
             exit 1
           fi
+          # 候选池是给本机测速工具用的，缺了不影响主产物，只提示
+          for f in public/pool.yaml public/pool.json; do
+            if [ -s "$f" ]; then
+              echo "候选池 $f: $(wc -c < "$f") 字节"
+            else
+              echo "::warning::候选池 $f 为空，本机测速工具会拿不到候选节点"
+            fi
+          done
           head -c 400 public/free-nodes.yaml
 
       - name: Upload artifacts (debug)

@@ -37,6 +37,7 @@ fs.writeFileSync(sourcesPath, `sources:\n  - name: 本地假源\n    url: ${srcU
 const outClient = path.join(workDir, 'out', 'free-nodes.yaml');
 const outProvider = path.join(workDir, 'out', 'providers', 'free-nodes.yaml');
 const outPool = path.join(workDir, 'out', 'pool.yaml');
+const outPoolJson = path.join(workDir, 'out', 'pool.json');
 
 // 假探测：us1 200ms、jp1 80ms、hk1 400ms、us2 1500ms（超 MAX_DELAY 应被丢掉）
 const DELAYS = {
@@ -58,6 +59,7 @@ async function fakeProbe(entries) {
     outClient,
     outProvider,
     outPool,
+    outPoolJson,
     probe: fakeProbe,
   });
 
@@ -87,6 +89,24 @@ async function fakeProbe(entries) {
     'hk1.example.com',
     '池里的 trojan 节点必须带 sni'
   );
+
+  // JSON 版候选池：给免 Node 的 Windows 工具（PowerShell）直接消费
+  const poolJson = JSON.parse(fs.readFileSync(outPoolJson, 'utf8'));
+  assert.deepStrictEqual(
+    Object.keys(poolJson).sort(),
+    ['count', 'generated', 'probeExpected', 'probeUrl', 'proxies'],
+    'pool.json 字段固定'
+  );
+  assert.strictEqual(poolJson.count, 4);
+  assert.strictEqual(poolJson.probeExpected, '204');
+  assert.ok(/^\d{4}-\d{2}-\d{2}T/.test(poolJson.generated), 'pool.json 需要生成时间');
+  assert.strictEqual(poolJson.proxies.length, 4);
+  assert.deepStrictEqual(
+    poolJson.proxies.map((p) => p.name),
+    poolDoc.proxies.map((p) => p.name),
+    'pool.json 与 pool.yaml 的节点必须一一对应'
+  );
+  assert.strictEqual(poolJson.proxies[0].server, 'us1.example.com');
 
   const providerDoc = YAML.load(fs.readFileSync(outProvider, 'utf8'));
   assert.deepStrictEqual(Object.keys(providerDoc), ['proxies'], 'provider 文件只能有 proxies');

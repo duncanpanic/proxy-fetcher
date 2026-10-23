@@ -12,6 +12,12 @@ public/providers/
 # 本机筛选产物
 local/
 
+# Windows 测速工具（内核 / geo 数据缓存 / 探测工作目录）
+tools/bin/
+tools/.cache/
+tools/.work/
+
 # 诊断临时文件（本机内核、抓下来的样本）
 .diag/
 public/pool.yaml
+public/pool.json

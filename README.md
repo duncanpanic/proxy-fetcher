@@ -47,8 +47,14 @@ public/free-nodes.yaml                        public/providers/free-nodes.yaml
 所以架构是两段式的：
 
 - **CI 只负责抓源**（机房能访问 `raw.githubusercontent.com`，你本机往往不行），
-  清洗去重后发布候选池 `public/pool.yaml`（默认最多 800 个，**不探测**）；
-- **探测搬到本机**，用你自己的网络筛一遍：`node select-local.js`。
+  清洗去重后发布候选池 `public/pool.yaml`（默认最多 800 个，**不探测**），同内容另出
+  `public/pool.json` 给下面那个免 Node 的 Windows 工具用；
+- **探测搬到本机**，用你自己的网络筛一遍：Windows 版 `tools\本机测速.bat`（推荐，免装
+  Node），或 Node 版 `node select-local.js`。
+
+```powershell
+tools\本机测速.bat                          # 双击也行，详见「Windows 本机测速」一节
+```
 
 ```bash
 npm install js-yaml
@@ -94,6 +100,45 @@ sudo SUB_URL="https://你的域名/providers/free-nodes.yaml" MIHOMO_SECRET=xxxx
 | `FETCH_TIMEOUT` | `15000` | 单个源抓取超时 |
 | `SOURCES_FILE` | `sources.yaml` | 源清单路径 |
 | `SUB_URL` / `MIHOMO_SECRET` | 见 `deploy.sh` | 仅服务端渲染 `config.yaml` 时使用 |
+
+## Windows 本机测速（免 Node / npm）
+
+CI 的探测视角是 GitHub runner（美国/欧洲机房），它能连上的节点，国内家宽往往只有个位数。
+所以要拿到「自己网络下真的能用」的节点，得在本机跑一遍探测。这个工具只用 Windows 自带的
+PowerShell 5.1，不装 Node、不装任何依赖：
+
+```bat
+tools\本机测速.bat
+```
+
+双击即可。它会：读候选池（CI 每 6 小时产出的 `public/pool.json`）→ 下载 mihomo 内核到
+`tools\bin`（首次约 22MB）→ 起一个临时内核，用**逐节点真实 HTTP 请求**测速 → 排序截断 →
+产出可直接导入客户端的 `local\nodes.yaml` 和 `local\report.txt`。
+
+带参数的写法：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\local-probe.ps1 `
+  -Pool https://node.lorcan.top/pool.json -MaxDelay 1500 -Top 30 -Concurrency 32
+```
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `-Pool` | `https://node.lorcan.top/pool.json` | 候选池：http(s) 地址或本地文件路径 |
+| `-Out` | `local` | 产物目录 |
+| `-MaxDelay` | `2000` | 延迟阈值（毫秒），超过即丢弃 |
+| `-Timeout` | `5000` | 单节点超时（毫秒） |
+| `-Top` | `60` | 最多保留多少个节点 |
+| `-Concurrency` | `32` | 并发探测数 |
+| `-TestUrl` | `https://www.gstatic.com/generate_204` | 探测目标 |
+| `-Force` | — | 强制重新下载内核 |
+| `-AllowPlaintext` | — | 允许 socks5/http 明文代理（默认剔除） |
+
+产物 `local\nodes.yaml` 是一份完整配置（含 DNS、`节点选择`/`自动选择` 两组），在客户端里
+「配置 → 导入本地文件」选中它就能用。跑完会调 `mihomo -t` 自校验，校验不过会直接报错。
+
+> 想用 Node 跑同一件事（例如配合 `MAX_DELAY` 环境变量、写进脚本）：`node select-local.js`，
+> 产物在 `local/nodes.yaml`、`local/provider.yaml`。
 
 ## 测试
 
