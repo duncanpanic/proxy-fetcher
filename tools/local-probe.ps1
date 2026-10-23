@@ -173,7 +173,12 @@ function Install-Mihomo {
 function Get-Pool {
   Write-Step "读取候选池：$script:PoolSource"
   if ($script:PoolSource -match '^https?://') {
-    $raw = Invoke-RestMethod -Uri $script:PoolSource -UseBasicParsing -Headers @{ 'User-Agent' = 'proxy-fetcher-local' }
+    # 不能用 Invoke-RestMethod：PS 5.1 在没有 charset 时按 Latin-1 解码，UTF-8 中文
+    # 会变成 0x80-0x9F 区间的乱码，写进 probe.json 后内核直接报 control characters
+    $wc = New-Object System.Net.WebClient
+    $wc.Headers.Add('User-Agent', 'proxy-fetcher-local')
+    $bytes = $wc.DownloadData($script:PoolSource)
+    $raw = [System.Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json
   } else {
     $p = $script:PoolSource
     if (-not [IO.Path]::IsPathRooted($p)) { $p = Join-Path (Get-Location).Path $p }
@@ -207,6 +212,11 @@ function Start-ProbeCore($proxies, $workDir, $ctrlPort) {
   for ($i = 0; $i -lt $proxies.Count; $i++) {
     $copy = @{}
     foreach ($prop in $proxies[$i].PSObject.Properties) { $copy[$prop.Name] = $prop.Value }
+    # 兜底：清掉 C0/C1 控制字符，否则 mihomo 会拒绝整份 probe.json
+    foreach ($key in @($copy.Keys)) {
+      $val = $copy[$key]
+      if ($val -is [string]) { $copy[$key] = ($val -replace '[ --]', '').Trim() }
+    }
     $origName = [string]$copy['name']
     $copy['name'] = "p$i"
 
