@@ -20,6 +20,7 @@
 'use strict';
 
 const fs = require('fs');
+const { fileURLToPath } = require('url');
 const os = require('os');
 const path = require('path');
 const http = require('http');
@@ -62,6 +63,8 @@ const CFG = {
   mihomoBin: process.env.MIHOMO_BIN || '',
   // 候选池：不经过探测的干净节点，供本机按自己的网络再筛一遍
   poolLimit: envNum('POOL_LIMIT', 3000),
+  // 每个源进池的上限：源之间重复极多，不设限的话一个几千节点的巨源就能把池子占满
+  sourceCap: envNum('SOURCE_CAP', 600),
   probeLimit: envNum('PROBE_LIMIT', 1200),
   allowPlaintext: process.env.ALLOW_PLAINTEXT === '1',
 };
@@ -96,10 +99,10 @@ function fetchText(url, timeoutMs, depth = 0) {
   return new Promise((resolve, reject) => {
     if (depth > 5) return reject(new Error('重定向次数过多'));
 
-    // 本地调试用：file:// 直接读盘
+    // 本地调试用：file:// 直接读盘（用 fileURLToPath 才能正确处理 Windows 盘符）
     if (String(url).startsWith('file://')) {
       try {
-        return resolve(fs.readFileSync(url.slice('file://'.length), 'utf8'));
+        return resolve(fs.readFileSync(fileURLToPath(url), 'utf8'));
       } catch (e) {
         return reject(e);
       }
@@ -1042,6 +1045,33 @@ function sampleEvenly(list, limit) {
 }
 
 /**
+ * 各源轮流取一个：让池子里每个源都有名额。
+ * 否则按源顺序拼接时，前几个大源会把 POOL_LIMIT 吃光（源更多 ≠ 覆盖更广）。
+ */
+function interleaveBySource(items) {
+  const buckets = new Map();
+  for (const item of items) {
+    const list = buckets.get(item.source);
+    if (list) list.push(item);
+    else buckets.set(item.source, [item]);
+  }
+  const queues = [...buckets.values()];
+  const out = [];
+  let moved = true;
+  while (moved) {
+    moved = false;
+    for (const queue of queues) {
+      const item = queue.shift();
+      if (item !== undefined) {
+        out.push(item);
+        moved = true;
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * 完整流水线。opts 用于测试注入：
  *   sourcesFile / outClient / outProvider / probe(entries) -> [{proxy, region, delay}]
  */
@@ -1070,8 +1100,28 @@ async function runPipeline(opts = {}) {
       key: dedupeKey(proxy),
     });
   }
-  const uniq = dedupe(entries);
-  log(`规范化后: ${entries.length}，去重后: ${uniq.length}`);
+  log(`规范化后: ${entries.length}`);
+
+  // 先按源各自去重、限量，再跨源去重。同一个机场常被多个聚合源重复收录，
+  // 单源限量能把名额让给「别人没有的节点」，而不是被重复节点吃掉。
+  const bySource = new Map();
+  for (const entry of entries) {
+    let bucket = bySource.get(entry.source);
+    if (!bucket) bySource.set(entry.source, (bucket = new Map()));
+    if (!bucket.has(entry.key)) bucket.set(entry.key, entry);
+  }
+  const capped = [];
+  const report = [];
+  for (const [source, bucket] of bySource) {
+    const list = [...bucket.values()];
+    const kept = CFG.sourceCap > 0 ? list.slice(0, CFG.sourceCap) : list;
+    report.push(`${source}:${list.length}${kept.length !== list.length ? `→${kept.length}` : ''}`);
+    capped.push(...kept);
+  }
+  log(`按源限量(SOURCE_CAP=${CFG.sourceCap}): ${report.join(' ')}`);
+
+  const uniq = dedupe(interleaveBySource(capped));
+  log(`去重后: ${uniq.length}`);
 
   // 候选池：清洗去重后、未经探测的全量节点。
   // 探测结果只反映执行机器的网络位置（CI runner 在境外，与你本机视角差异极大），
@@ -1172,6 +1222,7 @@ module.exports = {
   dedupeKey,
   dedupe,
   sampleEvenly,
+  interleaveBySource,
   rank,
   nameNodes,
   buildClientDoc,

@@ -447,6 +447,20 @@ test('分享链接列表：base64 套壳也能识别', () => {
   assert.deepStrictEqual(parsed.map((p) => p.type).sort(), ['ss', 'trojan', 'vmess']);
 });
 
+test('按源轮流取：每个源都有名额，不被大源吃光', () => {
+  const items = [
+    ...Array.from({ length: 10 }, (_, i) => ({ source: 'big', key: 'b' + i })),
+    { source: 'small', key: 's1' },
+    { source: 'tiny', key: 't1' },
+  ];
+  const out = fetchLib.interleaveBySource(items);
+  assert.equal(out.length, 12);
+  // 前三个必须来自三个不同的源（大源不会连续占满开头）
+  assert.equal(new Set(out.slice(0, 3).map((x) => x.source)).size, 3);
+  assert.equal(out[0].source, 'big');
+  assert.deepEqual(out.map((x) => x.key).sort(), items.map((x) => x.key).sort());
+});
+
 test('等距抽样：上千个节点里均匀取样，不让某个源独占', () => {
   const list = Array.from({ length: 100 }, (_, i) => ({ i }));
   const picked = fetchLib.sampleEvenly(list, 10);

@@ -6,10 +6,29 @@
 #
 # 本地 raw.githubusercontent.com 通常访问不了，但 GitHub Actions 可以 —— 抓源这一步
 # 始终留在 CI，本机只负责探测（tools\本机测速.bat）。
+#
+# 单个源的产出上限由 SOURCE_CAP 控制（默认 600）：源之间的重复节点很多，
+# 不设限的话一个几千节点的巨源就能把整个候选池占满，源多了反而覆盖更窄。
 sources:
   # ── 大合集：一次性拉几百到上千个节点 ────────────────────────────
   - name: "anaer-Sub"
     url: "https://raw.githubusercontent.com/anaer/Sub/main/clash.yaml"
+    enabled: true
+
+  - name: "Epodonios-v2ray-configs"
+    url: "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_Sub.txt"
+    enabled: true
+
+  - name: "MatinGhanbari-v2ray-configs"
+    url: "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/base64/all_sub.txt"
+    enabled: true
+
+  - name: "LalatinaHub-Mineral"
+    url: "https://raw.githubusercontent.com/LalatinaHub/Mineral/master/result/nodes"
+    enabled: true
+
+  - name: "ALIILAPRO-v2rayNG"
+    url: "https://raw.githubusercontent.com/ALIILAPRO/v2rayNG-Config/main/server.txt"
     enabled: true
 
   - name: "w1770946466-Auto_proxy"
@@ -32,6 +51,10 @@ sources:
     url: "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/Eternity.yml"
     enabled: true
 
+  - name: "mahdibland-ShadowsocksAggregator"
+    url: "https://raw.githubusercontent.com/mahdibland/ShadowsocksAggregator/master/Eternity"
+    enabled: true
+
   - name: "ts-sf-fly"
     url: "https://raw.githubusercontent.com/ts-sf/fly/main/v2"
     enabled: true
@@ -42,6 +65,32 @@ sources:
 
   - name: "chengaopan-AutoMergePublicNodes"
     url: "https://raw.githubusercontent.com/chengaopan/AutoMergePublicNodes/master/list.yml"
+    enabled: true
+
+  # ── Leon406/SubCrawler：按协议切好的分片，单文件上千个节点 ────────
+  # 它的抓取结果是「分享链接」格式（vless:// / ss:// …），vless 那份最大。
+  - name: "leon406-vless"
+    url: "https://raw.githubusercontent.com/Leon406/SubCrawler/main/sub/share/vless"
+    enabled: true
+
+  - name: "leon406-v2"
+    url: "https://raw.githubusercontent.com/Leon406/SubCrawler/main/sub/share/v2"
+    enabled: true
+
+  - name: "leon406-ss"
+    url: "https://raw.githubusercontent.com/Leon406/SubCrawler/main/sub/share/ss"
+    enabled: true
+
+  - name: "leon406-a11"
+    url: "https://raw.githubusercontent.com/Leon406/SubCrawler/main/sub/share/a11"
+    enabled: true
+
+  - name: "leon406-tr"
+    url: "https://raw.githubusercontent.com/Leon406/SubCrawler/main/sub/share/tr"
+    enabled: true
+
+  - name: "leon406-hy2"
+    url: "https://raw.githubusercontent.com/Leon406/SubCrawler/main/sub/share/hysteria2"
     enabled: true
 
   # ── 按地区切好的源，补 US/JP/SG/HK/TW 覆盖 ─────────────────────
@@ -84,4 +133,16 @@ sources:
 
   - name: "shaoyouvip-free"
     url: "https://raw.githubusercontent.com/shaoyouvip/free/main/base64.txt"
+    enabled: true
+
+  - name: "Ruk1ng001-freeSub"
+    url: "https://raw.githubusercontent.com/Ruk1ng001/freeSub/main/clash.yaml"
+    enabled: true
+
+  - name: "vxiaov-free_proxies"
+    url: "https://raw.githubusercontent.com/vxiaov/free_proxies/main/clash/clash.provider.yaml"
+    enabled: true
+
+  - name: "ermaozi01-free_clash_vpn"
+    url: "https://raw.githubusercontent.com/ermaozi01/free_clash_vpn/main/subscribe/clash.yml"
     enabled: true

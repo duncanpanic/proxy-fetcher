@@ -104,6 +104,7 @@ sudo SUB_URL="https://你的域名/providers/free-nodes.yaml" MIHOMO_SECRET=xxxx
 | `PROBE_CONCURRENCY` | `24` | 降级探测并发 |
 | `POOL_LIMIT` | `3000` | 候选池最多发布多少个未探测节点 |
 | `PROBE_LIMIT` | `1200` | CI 侧最多探测多少个（等距抽样，覆盖各个源） |
+| `SOURCE_CAP` | `600` | 单个源最多贡献多少个节点（防止巨型源占满候选池，`0` 不限） |
 | `ALLOW_PLAINTEXT` | 关 | 设为 `1` 才发布 socks5/http 明文代理 |
 | `FETCH_TIMEOUT` | `15000` | 单个源抓取超时 |
 | `SOURCES_FILE` | `sources.yaml` | 源清单路径 |
@@ -159,7 +160,7 @@ node test/pipeline.test.js    # 用 file:// 假源 + 注入探测器跑完整流
 
 ## 源与格式
 
-`sources.yaml` 里现在有 19 个源，混着三种发布格式，抓取时自动识别，不需要配 `type`：
+`sources.yaml` 里现在有 33 个源，混着三种发布格式，抓取时自动识别，不需要配 `type`：
 
 1. **clash yaml** —— 带 `proxies:` 的配置，或直接是一个节点数组；
 2. **分享链接列表** —— 每行一条 `ss://` / `vmess://` / `vless://` / `trojan://` /
@@ -169,7 +170,15 @@ node test/pipeline.test.js    # 用 file:// 假源 + 注入探测器跑完整流
 3. **base64 套壳** —— 上面两种整体再 base64 一次（机场订阅最常见）。
 
 一份源的实际产出：`anaer/Sub` 约 1600 个、`Auto_proxy` 约 550 个、`NoMoreWalls` 约 430 个，
-全部源合计约 4000 个原始节点，去重清洗后进候选池（`POOL_LIMIT`，默认 3000）。
+全部源合计约 3 万个原始节点；每个源先去重、再按 `SOURCE_CAP`（默认 600）限量，
+然后各源轮流进池（`interleaveBySource`），最后截到 `POOL_LIMIT`（默认 3000）。
+
+限量是必须的：`Leon406/SubCrawler` 的 vless 分片一份就 8857 个，
+`LalatinaHub/Mineral` 7275 个，`Epodonios/v2ray-configs` 3871 个，
+不设限的话候选池会被它们三个吃光，再多加源也没意义。
+
+实测（14 个新源，本地 file:// 跑通）：原始 32473 → 按源限量后 3598 → 池 3000，
+单源最多 464 个（`leon406-vless`），最少的 10 个，每个源都有名额。
 
 ## 维护
 
