@@ -578,6 +578,7 @@ try {
 
   $outDir = $Out
   if (-not [IO.Path]::IsPathRooted($outDir)) { $outDir = Join-Path (Get-Location).Path $outDir }
+  $outDir = [IO.Path]::GetFullPath($outDir).TrimEnd('\')
   New-Item -ItemType Directory -Force -Path $outDir | Out-Null
   $outFile = Join-Path $outDir 'nodes.yaml'
 
