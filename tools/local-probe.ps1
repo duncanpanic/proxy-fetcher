@@ -209,6 +209,16 @@ function Start-ProbeCore($proxies, $workDir, $ctrlPort) {
     foreach ($prop in $proxies[$i].PSObject.Properties) { $copy[$prop.Name] = $prop.Value }
     $origName = [string]$copy['name']
     $copy['name'] = "p$i"
+
+    # 兜底：obfs 没有配套密码时 mihomo 会拒绝整份配置（proxy N: missing obfs password）
+    if ($copy['type'] -match '^hysteria2?$') {
+      $obfsText = [string]$copy['obfs']
+      $obfsPass = [string]$copy['obfs-password']
+      if ([string]::IsNullOrWhiteSpace($obfsText) -or $obfsText -match '^(none|off|false|0)$' -or [string]::IsNullOrWhiteSpace($obfsPass)) {
+        $copy.Remove('obfs')
+        $copy.Remove('obfs-password')
+      }
+    }
     $named += $copy
     $map += [pscustomobject]@{ Index = $i; Alias = "p$i"; Orig = $origName; Type = [string]$copy['type']; Server = [string]$copy['server']; Port = $copy['port'] }
   }
@@ -416,7 +426,13 @@ function ConvertTo-PlainData($value) {
   # ConvertFrom-Json 出来的是 PSCustomObject，直接序列化会被当成字符串（reality-opts 就是坑），
   # 先统一转成 OrderedDictionary / 数组。
   if ($null -eq $value) { return $null }
-  if ($value -is [string] -or $value -is [bool] -or
+  if ($value -is [string]) {
+    # 免费源里常混进 C0/C1 控制字符（如 U+0085），mihomo 解析 JSON/YAML 会直接报
+    # yaml: control characters are not allowed，这里统一清掉
+    return (($value -replace '[ --]', '').Trim())
+  }
+
+  if ($value -is [bool] -or
     $value -is [int] -or $value -is [long] -or $value -is [double] -or
     $value -is [decimal] -or $value -is [single]) { return $value }
 

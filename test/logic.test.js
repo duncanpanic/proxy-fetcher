@@ -97,6 +97,24 @@ test('垃圾节点被丢弃：未知协议 / 缺服务器 / 端口越界', () =>
   assert.strictEqual(fetchLib.sanitizeNode(null), null);
 });
 
+test('控制字符被清掉（否则 mihomo 报 yaml: control characters are not allowed）', () => {
+  const out = fetchLib.sanitizeNode({
+    name: 'US\u0085-001\u0007',
+    type: 'vless',
+    server: 'a.com',
+    port: 443,
+    uuid: 'u\u0000uid',
+    ws: { path: '/p\u001bath' },
+  });
+  assert.strictEqual(out.name, 'US-001');
+  assert.strictEqual(out.uuid, 'uuid');
+  assert.deepStrictEqual(out.ws, { path: '/path' });
+  assert.ok(!/[\u0000-\u001f\u007f-\u009f]/.test(JSON.stringify(out)));
+
+  assert.strictEqual(fetchLib.stripControl(' a\u0085b '), 'ab');
+  assert.deepStrictEqual(fetchLib.cleanDeep({ a: ['x\u009fy'], b: 1 }), { a: ['xy'], b: 1 });
+});
+
 console.log('normalizeSni');
 
 test('SNI 只挡明显非域名，不因关键词误杀', () => {
@@ -264,6 +282,25 @@ test('hysteria2: 源里的 sni 不能被丢掉', () => {
   assert.strictEqual(out.sni, 'jp.example.com');
   assert.strictEqual(out.obfs, 'salamander', 'hy2 的 obfs 必须原样保留');
   assert.strictEqual(out['obfs-password'], 'x');
+});
+
+test('hysteria2: obfs 必须成对，obfs=none 视作没有', () => {
+  const base = { type: 'hysteria2', server: '5.6.7.8', port: 443, password: 'p' };
+
+  // 只有 obfs 没有密码 -> mihomo 会报 missing obfs password，两个字段都丢掉
+  const lonely = fetchLib.sanitizeNode({ ...base, obfs: 'salamander' });
+  assert.strictEqual(lonely.obfs, undefined);
+  assert.strictEqual(lonely['obfs-password'], undefined);
+
+  // 分享链接里最常见的 obfs=none
+  const none = fetchLib.sanitizeNode({ ...base, obfs: 'none', 'obfs-password': '' });
+  assert.strictEqual(none.obfs, undefined);
+  assert.strictEqual(none['obfs-password'], undefined);
+
+  // 成对的保留
+  const ok = fetchLib.sanitizeNode({ ...base, obfs: ' Salamander ', 'obfs-password': ' sec ' });
+  assert.strictEqual(ok.obfs, 'salamander');
+  assert.strictEqual(ok['obfs-password'], 'sec');
 });
 
 test('tuic: SNI 写进 sni', () => {

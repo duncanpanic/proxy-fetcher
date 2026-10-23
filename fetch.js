@@ -513,6 +513,26 @@ function hasTLS(node, type) {
   return false;
 }
 
+// C0/C1 控制字符：免费源里常混进 U+0085(NEL)、U+0007 之类，
+// 写进 YAML/JSON 后 mihomo 会直接拒绝解析（yaml: control characters are not allowed）
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
+
+function stripControl(value) {
+  return String(value).replace(CONTROL_CHARS, '').trim();
+}
+
+/** 递归清洗对象里的所有字符串字段 */
+function cleanDeep(value) {
+  if (typeof value === 'string') return stripControl(value);
+  if (Array.isArray(value)) return value.map(cleanDeep);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = cleanDeep(v);
+    return out;
+  }
+  return value;
+}
+
 /**
  * 单个原始节点 -> 可用的 mihomo proxy 对象（字段保留原样，只做必要修补）。
  * 关键修补：
@@ -529,7 +549,8 @@ function sanitizeNode(node) {
   const port = parseInt(node.port, 10);
   if (!server || !Number.isFinite(port) || port <= 0 || port > 65535) return null;
 
-  const out = { ...node, type, server, port };
+  // 先递归清洗字符串字段（控制字符会让 mihomo 拒绝解析整份配置）
+  const out = cleanDeep({ ...node, type, server, port });
 
   // 明文代理默认不发布（可用 ALLOW_PLAINTEXT=1 放行）
   if (PLAINTEXT_TYPES.has(type) && !CFG.allowPlaintext) return null;
@@ -564,6 +585,23 @@ function sanitizeNode(node) {
     out.alterId = parseInt(node.alterId ?? node.aid ?? 0, 10) || 0;
     delete out.aid;
     if (!out.cipher) out.cipher = 'auto';
+  }
+
+  // hysteria/hysteria2 的 obfs 必须成对出现：只有 obfs 没有 obfs-password 时
+  // mihomo 会拒绝整份配置（proxy N: missing obfs password）。
+  // 另外分享链接里常见 obfs=none，它等价于「不混淆」，要当成没写。
+  if (type === 'hysteria' || type === 'hysteria2') {
+    const obfsType = String(out.obfs == null ? '' : out.obfs)
+      .trim()
+      .toLowerCase();
+    const obfsPass = String(out['obfs-password'] == null ? '' : out['obfs-password']).trim();
+    if (obfsType && !['none', 'off', 'false', '0'].includes(obfsType) && obfsPass) {
+      out.obfs = obfsType;
+      out['obfs-password'] = obfsPass;
+    } else {
+      delete out.obfs;
+      delete out['obfs-password'];
+    }
   }
 
   return out;
@@ -1116,6 +1154,8 @@ module.exports = {
   parseShareUri,
   parseUriList,
   sanitizeNode,
+  stripControl,
+  cleanDeep,
   normalizeSni,
   regionTag,
   dedupeKey,
