@@ -315,5 +315,111 @@ test('ALLOW_PLAINTEXT=1 时才放行明文代理', () => {
   assert.strictEqual(out.type, 'socks5');
 });
 
+test('分享链接：ss:// 两种写法都能解析', () => {
+  const sip002 = fetchLib.parseShareUri('ss://YWVzLTI1Ni1nY206cGFzcw==@1.2.3.4:8388#%E9%A6%99%E6%B8%AF-01');
+  assert.strictEqual(sip002.type, 'ss');
+  assert.strictEqual(sip002.cipher, 'aes-256-gcm');
+  assert.strictEqual(sip002.password, 'pass');
+  assert.strictEqual(sip002.server, '1.2.3.4');
+  assert.strictEqual(sip002.port, 8388);
+  assert.strictEqual(sip002.name, '香港-01');
+
+  const legacy = fetchLib.parseShareUri(
+    `ss://${Buffer.from('chacha20-ietf-poly1305:pw@5.6.7.8:443').toString('base64')}#legacy`
+  );
+  assert.strictEqual(legacy.cipher, 'chacha20-ietf-poly1305');
+  assert.strictEqual(legacy.server, '5.6.7.8');
+  assert.strictEqual(legacy.port, 443);
+});
+
+test('分享链接：vmess:// base64 JSON', () => {
+  const payload = {
+    v: '2',
+    ps: 'US-东京',
+    add: 'vm.example.com',
+    port: '443',
+    id: '11111111-2222-3333-4444-555555555555',
+    aid: '0',
+    net: 'ws',
+    host: 'cdn.example.com',
+    path: '/ray',
+    tls: 'tls',
+    sni: 'www.example.com',
+    scy: 'auto',
+  };
+  const node = fetchLib.parseShareUri(`vmess://${Buffer.from(JSON.stringify(payload)).toString('base64')}`);
+  assert.strictEqual(node.type, 'vmess');
+  assert.strictEqual(node.server, 'vm.example.com');
+  assert.strictEqual(node.uuid, payload.id);
+  assert.strictEqual(node.tls, true);
+  assert.strictEqual(node.servername, 'www.example.com');
+  assert.strictEqual(node.network, 'ws');
+  assert.strictEqual(node['ws-opts'].path, '/ray');
+  assert.strictEqual(node['ws-opts'].headers.Host, 'cdn.example.com');
+});
+
+test('分享链接：vless reality 参数映射到 reality-opts', () => {
+  const node = fetchLib.parseShareUri(
+    'vless://uuid-1@1.2.3.4:443?security=reality&pbk=PBK123&sid=ab12&fp=chrome&sni=www.apple.com&flow=xtls-rprx-vision&type=tcp#reality'
+  );
+  assert.strictEqual(node.tls, true);
+  assert.deepStrictEqual(node['reality-opts'], { 'public-key': 'PBK123', 'short-id': 'ab12' });
+  assert.strictEqual(node['client-fingerprint'], 'chrome');
+  assert.strictEqual(node.flow, 'xtls-rprx-vision');
+
+  const out = fetchLib.sanitizeNode(node);
+  assert.ok(out['reality-opts'], '规范化后 reality-opts 不能丢');
+  assert.strictEqual(out.servername, 'www.apple.com');
+  assert.strictEqual(out['skip-cert-verify'], true);
+});
+
+test('分享链接：trojan / hysteria2 / tuic', () => {
+  const trojan = fetchLib.parseShareUri('trojan://pw@t.example.com:443?sni=t.example.com&type=ws&path=%2Fws#tj');
+  assert.strictEqual(trojan.type, 'trojan');
+  assert.strictEqual(trojan.password, 'pw');
+  assert.strictEqual(trojan.network, 'ws');
+  assert.strictEqual(trojan['ws-opts'].path, '/ws');
+
+  const hy2 = fetchLib.parseShareUri(
+    'hysteria2://auth@h.example.com:8443?sni=h.example.com&obfs=salamander&obfs-password=x&insecure=1#hy'
+  );
+  assert.strictEqual(hy2.type, 'hysteria2');
+  assert.strictEqual(hy2.password, 'auth');
+  assert.strictEqual(hy2.obfs, 'salamander');
+  assert.strictEqual(hy2['obfs-password'], 'x');
+
+  const tuic = fetchLib.parseShareUri('tuic://uuid-2:pw2@u.example.com:443?alpn=h3&congestion_control=bbr#tuic');
+  assert.strictEqual(tuic.type, 'tuic');
+  assert.strictEqual(tuic.uuid, 'uuid-2');
+  assert.strictEqual(tuic.password, 'pw2');
+  assert.deepStrictEqual(tuic.alpn, ['h3']);
+});
+
+test('分享链接列表：base64 套壳也能识别', () => {
+  const list = [
+    'ss://YWVzLTI1Ni1nY206cGFzcw==@1.2.3.4:8388#ss-1',
+    'trojan://pw@t.example.com:443?sni=t.example.com#tj-1',
+    'not-a-node',
+    'vmess://' + Buffer.from(JSON.stringify({ add: 'vm.example.com', port: 443, id: 'u-1', ps: 'vm-1' })).toString('base64'),
+  ].join('\n');
+  assert.strictEqual(fetchLib.parseUriList(list).length, 3);
+
+  const wrapped = Buffer.from(list).toString('base64');
+  const parsed = fetchLib.parseProxyPayload(wrapped);
+  assert.strictEqual(parsed.length, 3, 'base64 分享链接列表应被识别');
+  assert.deepStrictEqual(parsed.map((p) => p.type).sort(), ['ss', 'trojan', 'vmess']);
+});
+
+test('等距抽样：上千个节点里均匀取样，不让某个源独占', () => {
+  const list = Array.from({ length: 100 }, (_, i) => ({ i }));
+  const picked = fetchLib.sampleEvenly(list, 10);
+  assert.strictEqual(picked.length, 10);
+  assert.strictEqual(picked[0].i, 0);
+  assert.ok(picked[9].i >= 80, `应覆盖到尾部，实际最后一个 ${picked[9].i}`);
+  assert.ok(picked.every((x, idx) => idx === 0 || x.i > picked[idx - 1].i), '顺序不能乱');
+  assert.strictEqual(fetchLib.sampleEvenly(list, 500).length, 100, '上限大于总数时原样返回');
+  assert.deepStrictEqual(fetchLib.sampleEvenly([], 10), []);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exitCode = 1;

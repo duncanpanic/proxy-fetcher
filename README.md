@@ -32,7 +32,12 @@ public/free-nodes.yaml                        public/providers/free-nodes.yaml
 3. **经它真的能访问到 `204`** —— 只有这一条等于「能用」。
 
 现在只有第 3 种节点会被发布。筛选口径由 `PROBE_URL` / `PROBE_EXPECTED` 控制，默认
-`https://www.gstatic.com/generate_204` 期望 `204`。
+`https://cp.cloudflare.com/generate_204` 期望 `204`。
+
+> 为什么不用 `www.gstatic.com/generate_204`：这个域名在国内会被解析到 `120.253.253.34`
+> 这类国内 CDN 节点，于是在境外节点上测出来的延迟里多了一段「绕回国内再回来」的绕路，
+> 真实出口质量反而被掩盖。Cloudflare 是 anycast，从哪个出口走都落到离家最近的那台。
+> 想换回去：`PROBE_URL=... node fetch.js`（本机工具用 `-TestUrl`）。
 
 ## 重要：探测视角决定一切
 
@@ -47,7 +52,7 @@ public/free-nodes.yaml                        public/providers/free-nodes.yaml
 所以架构是两段式的：
 
 - **CI 只负责抓源**（机房能访问 `raw.githubusercontent.com`，你本机往往不行），
-  清洗去重后发布候选池 `public/pool.yaml`（默认最多 800 个，**不探测**），同内容另出
+  清洗去重后发布候选池 `public/pool.yaml`（默认最多 3000 个，**不探测**），同内容另出
   `public/pool.json` 给下面那个免 Node 的 Windows 工具用；
 - **探测搬到本机**，用你自己的网络筛一遍：Windows 版 `tools\本机测速.bat`（推荐，免装
   Node），或 Node 版 `node select-local.js`。
@@ -90,13 +95,16 @@ sudo SUB_URL="https://你的域名/providers/free-nodes.yaml" MIHOMO_SECRET=xxxx
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `MIHOMO_BIN` | 自动在 `PATH` 找 `mihomo` | 探测用内核路径；给了路径但文件不存在时自动降级 |
-| `PROBE_URL` | `https://www.gstatic.com/generate_204` | 探测目标 |
+| `PROBE_URL` | `https://cp.cloudflare.com/generate_204` | 探测目标 |
 | `PROBE_EXPECTED` | `204` | 期望状态码，不匹配即判死 |
 | `PROBE_TIMEOUT` | `3000` | 单节点超时（毫秒） |
 | `MAX_DELAY` | `800` | 超过该延迟的节点直接丢弃；`0` 表示不限制 |
 | `MAX_NODES` | `100` | 最终发布节点数上限（排序后截断） |
 | `PROBE_DEADLINE` | `240000` | 降级探测的总预算，防止 CI 超时 |
 | `PROBE_CONCURRENCY` | `24` | 降级探测并发 |
+| `POOL_LIMIT` | `3000` | 候选池最多发布多少个未探测节点 |
+| `PROBE_LIMIT` | `1200` | CI 侧最多探测多少个（等距抽样，覆盖各个源） |
+| `ALLOW_PLAINTEXT` | 关 | 设为 `1` 才发布 socks5/http 明文代理 |
 | `FETCH_TIMEOUT` | `15000` | 单个源抓取超时 |
 | `SOURCES_FILE` | `sources.yaml` | 源清单路径 |
 | `SUB_URL` / `MIHOMO_SECRET` | 见 `deploy.sh` | 仅服务端渲染 `config.yaml` 时使用 |
@@ -130,7 +138,8 @@ powershell -ExecutionPolicy Bypass -File tools\local-probe.ps1 `
 | `-Timeout` | `5000` | 单节点超时（毫秒） |
 | `-Top` | `60` | 最多保留多少个节点 |
 | `-Concurrency` | `32` | 并发探测数 |
-| `-TestUrl` | `https://www.gstatic.com/generate_204` | 探测目标 |
+| `-TestUrl` | `https://cp.cloudflare.com/generate_204` | 探测目标 |
+| `-ExpectedStatus` | `204` | 期望状态码 |
 | `-Force` | — | 强制重新下载内核 |
 | `-AllowPlaintext` | — | 允许 socks5/http 明文代理（默认剔除） |
 
@@ -146,6 +155,20 @@ powershell -ExecutionPolicy Bypass -File tools\local-probe.ps1 `
 node test/logic.test.js      # 规范化/去重/排序/产出契约
 node test/pipeline.test.js    # 用 file:// 假源 + 注入探测器跑完整流水线
 ```
+
+## 源与格式
+
+`sources.yaml` 里现在有 19 个源，混着三种发布格式，抓取时自动识别，不需要配 `type`：
+
+1. **clash yaml** —— 带 `proxies:` 的配置，或直接是一个节点数组；
+2. **分享链接列表** —— 每行一条 `ss://` / `vmess://` / `vless://` / `trojan://` /
+   `hysteria2://` / `tuic://`（解析在 `fetch.js` 的 `parseUriList()`，包括 vmess 的
+   base64-JSON 老格式、ss 的 SIP002 与 `base64(method:pass@host:port)` 两种写法、
+   `ws-opts`/`grpc-opts`/`reality-opts` 等传输层参数）；
+3. **base64 套壳** —— 上面两种整体再 base64 一次（机场订阅最常见）。
+
+一份源的实际产出：`anaer/Sub` 约 1600 个、`Auto_proxy` 约 550 个、`NoMoreWalls` 约 430 个，
+全部源合计约 4000 个原始节点，去重清洗后进候选池（`POOL_LIMIT`，默认 3000）。
 
 ## 维护
 

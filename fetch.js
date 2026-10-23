@@ -57,11 +57,12 @@ const CFG = {
   maxDelayMs: envNum('MAX_DELAY', 800),
   maxNodes: envNum('MAX_NODES', 100),
   probeDeadlineMs: envNum('PROBE_DEADLINE', 240000),
-  probeUrl: process.env.PROBE_URL || 'https://www.gstatic.com/generate_204',
+  probeUrl: process.env.PROBE_URL || 'https://cp.cloudflare.com/generate_204',
   probeExpected: process.env.PROBE_EXPECTED || '204',
   mihomoBin: process.env.MIHOMO_BIN || '',
   // 候选池：不经过探测的干净节点，供本机按自己的网络再筛一遍
-  poolLimit: envNum('POOL_LIMIT', 800),
+  poolLimit: envNum('POOL_LIMIT', 3000),
+  probeLimit: envNum('PROBE_LIMIT', 1200),
   allowPlaintext: process.env.ALLOW_PLAINTEXT === '1',
 };
 
@@ -170,9 +171,251 @@ function decodeBase64(text) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 分享链接解析（ss:// vmess:// vless:// trojan:// hysteria2:// tuic://）
+// ---------------------------------------------------------------------------
+const URI_SCHEME_RE = /^(ss|vmess|vless|trojan|hysteria2?|hy2|tuic):\/\//i;
+
+function safeDecode(text) {
+  if (typeof text !== 'string' || !text) return '';
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return text;
+  }
+}
+
+function splitList(value) {
+  if (!value) return undefined;
+  const arr = String(value)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return arr.length ? arr : undefined;
+}
+
+/** 拆 host:port，兼容 [IPv6]:port */
+function splitHostPort(text) {
+  const s = String(text || '').trim();
+  if (!s) return null;
+  let host;
+  let port;
+  if (s.startsWith('[')) {
+    const end = s.indexOf(']');
+    if (end < 0) return null;
+    host = s.slice(1, end);
+    port = s.slice(end + 1).replace(/^:/, '');
+  } else {
+    const at = s.lastIndexOf(':');
+    if (at < 0) return null;
+    host = s.slice(0, at);
+    port = s.slice(at + 1);
+  }
+  const n = parseInt(port, 10);
+  if (!host || !Number.isFinite(n) || n <= 0 || n > 65535) return null;
+  return { host, port: n };
+}
+
+/** ws / grpc / h2 等传输层参数映射 */
+function applyTransport(node, network, opts = {}) {
+  const net = String(network || '').trim().toLowerCase();
+  if (!net || net === 'tcp' || net === 'none' || net === 'raw') return node;
+  if (net === 'ws') {
+    node.network = 'ws';
+    const ws = {};
+    if (opts.path) ws.path = safeDecode(opts.path);
+    if (opts.host) ws.headers = { Host: String(opts.host) };
+    if (Object.keys(ws).length) node['ws-opts'] = ws;
+    return node;
+  }
+  if (net === 'grpc') {
+    node.network = 'grpc';
+    const service = opts.serviceName || opts.path;
+    if (service) node['grpc-opts'] = { 'grpc-service-name': safeDecode(service) };
+    return node;
+  }
+  if (net === 'h2' || net === 'http') {
+    node.network = 'h2';
+    const h2 = {};
+    if (opts.path) h2.path = safeDecode(opts.path);
+    if (opts.host) h2.host = [String(opts.host)];
+    if (Object.keys(h2).length) node['h2-opts'] = h2;
+    return node;
+  }
+  node.network = net;
+  return node;
+}
+
+/** vmess:// 是 base64(JSON) 的老格式 */
+function parseVmessUri(rest) {
+  const body = String(rest || '').split('#')[0].trim();
+  const json = decodeBase64(body);
+  if (!json) return null;
+  let c;
+  try {
+    c = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  const hit = splitHostPort(`${c.add}:${c.port}`);
+  if (!hit || !c.id) return null;
+  const node = {
+    name: String(c.ps || ''),
+    type: 'vmess',
+    server: hit.host,
+    port: hit.port,
+    uuid: String(c.id).trim(),
+    alterId: parseInt(c.aid ?? 0, 10) || 0,
+  };
+  if (c.scy) node.cipher = String(c.scy);
+  if (c.tls === 'tls' || c.tls === true) node.tls = true;
+  if (c.sni) node.servername = c.sni;
+  else if (c.tls === 'tls' && c.host) node.servername = c.host;
+  applyTransport(node, c.net, { host: c.host, path: c.path, serviceName: c.path });
+  const alpn = splitList(c.alpn);
+  if (alpn) node.alpn = alpn;
+  if (c.fp) node['client-fingerprint'] = String(c.fp);
+  return node;
+}
+
+/** 单条分享链接 -> 节点对象（字段名保持 mihomo 口径，交给 sanitizeNode 统一收口） */
+function parseShareUri(line) {
+  const m = /^([a-zA-Z0-9]+):\/\/(.*)$/.exec(String(line || '').trim());
+  if (!m) return null;
+  const scheme = m[1].toLowerCase();
+  let rest = m[2];
+  if (scheme === 'vmess') return parseVmessUri(rest);
+
+  let name = '';
+  const hashAt = rest.indexOf('#');
+  if (hashAt >= 0) {
+    name = safeDecode(rest.slice(hashAt + 1));
+    rest = rest.slice(0, hashAt);
+  }
+  let query = '';
+  const qAt = rest.indexOf('?');
+  if (qAt >= 0) {
+    query = rest.slice(qAt + 1);
+    rest = rest.slice(0, qAt);
+  }
+  const q = new URLSearchParams(query);
+
+  const at = rest.lastIndexOf('@');
+  let userinfo = at >= 0 ? rest.slice(0, at) : '';
+  let hostpart = at >= 0 ? rest.slice(at + 1) : rest;
+
+  if (scheme === 'ss') {
+    if (at < 0) {
+      // 老格式：ss://base64(method:password@host:port)#name
+      const decoded = decodeBase64(rest);
+      if (!decoded) return null;
+      const a2 = decoded.lastIndexOf('@');
+      if (a2 < 0) return null;
+      userinfo = decoded.slice(0, a2);
+      hostpart = decoded.slice(a2 + 1);
+    } else if (!userinfo.includes(':')) {
+      // SIP002：ss://base64(method:password)@host:port
+      const decoded = decodeBase64(userinfo);
+      if (decoded) userinfo = decoded;
+    }
+    const hit = splitHostPort(hostpart);
+    const sep = userinfo.indexOf(':');
+    if (!hit || sep <= 0) return null;
+    const node = {
+      name,
+      type: 'ss',
+      server: hit.host,
+      port: hit.port,
+      cipher: userinfo.slice(0, sep),
+      password: userinfo.slice(sep + 1),
+    };
+    return node;
+  }
+
+  const hit = splitHostPort(hostpart);
+  if (!hit) return null;
+  const sni = q.get('sni') || q.get('peer') || q.get('servername');
+  const insecure = ['1', 'true'].includes(String(q.get('allowInsecure') || q.get('insecure') || '').toLowerCase());
+  const network = q.get('type') || q.get('network') || '';
+  const host = q.get('host') || '';
+  const path = q.get('path') || '';
+  const serviceName = q.get('serviceName') || q.get('servicename') || '';
+  const alpn = splitList(q.get('alpn'));
+  const fp = q.get('fp') || q.get('fingerprint');
+
+  let node = null;
+  if (scheme === 'vless') {
+    const security = String(q.get('security') || '').toLowerCase();
+    node = { name, type: 'vless', server: hit.host, port: hit.port, uuid: decodeURIComponent(userinfo) };
+    if (security === 'tls' || security === 'reality' || security === 'xtls') node.tls = true;
+    if (security === 'reality') {
+      const pbk = q.get('pbk');
+      if (pbk) {
+        node['reality-opts'] = { 'public-key': pbk };
+        const sid = q.get('sid');
+        if (sid) node['reality-opts']['short-id'] = sid;
+      }
+    }
+    if (q.get('flow')) node.flow = q.get('flow');
+  } else if (scheme === 'trojan') {
+    node = { name, type: 'trojan', server: hit.host, port: hit.port, password: decodeURIComponent(userinfo) };
+  } else if (scheme === 'hysteria2' || scheme === 'hysteria' || scheme === 'hy2') {
+    node = {
+      name,
+      type: scheme === 'hy2' ? 'hysteria2' : scheme,
+      server: hit.host,
+      port: hit.port,
+      password: decodeURIComponent(userinfo),
+    };
+    if (q.get('obfs')) node.obfs = q.get('obfs');
+    if (q.get('obfs-password')) node['obfs-password'] = q.get('obfs-password');
+    if (q.get('up')) node.up = q.get('up');
+    if (q.get('down')) node.down = q.get('down');
+  } else if (scheme === 'tuic') {
+    const parts = decodeURIComponent(userinfo).split(':');
+    node = {
+      name,
+      type: 'tuic',
+      server: hit.host,
+      port: hit.port,
+      uuid: parts[0],
+    };
+    if (parts.length > 1) node.password = parts.slice(1).join(':');
+    if (q.get('congestion_control')) node['congestion-controller'] = q.get('congestion_control');
+    if (q.get('udp_relay_mode')) node['udp-relay-mode'] = q.get('udp_relay_mode');
+  } else {
+    return null;
+  }
+
+  if (sni) node.servername = sni;
+  if (insecure) node['skip-cert-verify'] = true;
+  if (alpn) node.alpn = alpn;
+  if (fp) node['client-fingerprint'] = fp;
+  applyTransport(node, network, { host, path, serviceName });
+  return node;
+}
+
+/** 文本里每行一条分享链接 */
+function parseUriList(text) {
+  const lines = String(text || '').split(/\r?\n/);
+  const out = [];
+  for (const line of lines) {
+    const s = line.trim();
+    if (!s || !URI_SCHEME_RE.test(s)) continue;
+    try {
+      const node = parseShareUri(s);
+      if (node && isProxyLike(node)) out.push(node);
+    } catch {
+      // 单条链接解析失败不影响其它
+    }
+  }
+  return out;
+}
+
 /**
  * 一段订阅文本 -> 节点数组。
- * 支持：mihomo/clash 的 proxies: 列表、纯节点数组、base64 再套一层 yaml。
+ * 支持：mihomo/clash 的 proxies: 列表、纯节点数组、base64 再套一层 yaml，
+ * 以及分享链接列表（ss:// vmess:// vless:// trojan:// hysteria2:// tuic://）。
  */
 function parseProxyPayload(text) {
   const src = String(text || '').trim();
@@ -198,6 +441,14 @@ function parseProxyPayload(text) {
   const decoded = decodeBase64(src);
   if (decoded) {
     nodes = pick(tryYaml(decoded));
+    if (nodes.length) return nodes;
+  }
+
+  // 分享链接列表（机场/聚合器最常见的发布格式，可能是 base64 套壳）
+  nodes = parseUriList(src);
+  if (nodes.length) return nodes;
+  if (decoded) {
+    nodes = parseUriList(decoded);
     if (nodes.length) return nodes;
   }
   return [];
@@ -740,6 +991,19 @@ async function crawlSources(sources) {
 }
 
 /**
+ * 等距抽样：池子上千个节点时，CI 侧探测只需要一部分，
+ * 但直接 slice 会让「排在前面的源」独占全部名额，所以按下标等距取。
+ */
+function sampleEvenly(list, limit) {
+  if (!Array.isArray(list) || list.length === 0) return [];
+  if (!(limit > 0) || list.length <= limit) return list.slice();
+  const stride = list.length / limit;
+  const out = [];
+  for (let i = 0; i < list.length && out.length < limit; i += stride) out.push(list[Math.floor(i)]);
+  return out;
+}
+
+/**
  * 完整流水线。opts 用于测试注入：
  *   sourcesFile / outClient / outProvider / probe(entries) -> [{proxy, region, delay}]
  */
@@ -791,7 +1055,9 @@ async function runPipeline(opts = {}) {
   });
   log(`候选池: ${poolProxies.length} 个（未探测）`);
 
-  const probed = await probe(uniq);
+  // CI 侧探测只用于「有总比没有强」的兜底产物，池子上限到了 3000+ 时没必要全测；
+  // 按等距抽样取 PROBE_LIMIT 个，避免「排前面的源」独占名额（本机筛选才是准的）。
+  const probed = await probe(sampleEvenly(uniq, CFG.probeLimit));
   log(`通过真实探测: ${probed.length}`);
 
   const kept = rank(probed);
@@ -847,11 +1113,14 @@ module.exports = {
   fetchText,
   loadSources,
   parseProxyPayload,
+  parseShareUri,
+  parseUriList,
   sanitizeNode,
   normalizeSni,
   regionTag,
   dedupeKey,
   dedupe,
+  sampleEvenly,
   rank,
   nameNodes,
   buildClientDoc,

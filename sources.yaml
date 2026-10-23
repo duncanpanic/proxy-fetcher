@@ -1,32 +1,87 @@
 # proxy-fetcher/sources.yaml
+#
+# 每个源都是「一份订阅」：clash yaml（proxies 列表）、纯节点数组、
+# 或分享链接列表（ss:// vmess:// vless:// trojan:// hysteria2:// tuic://，可 base64 套壳）。
+# fetch.js 会自动识别格式，不需要写 type。
+#
+# 本地 raw.githubusercontent.com 通常访问不了，但 GitHub Actions 可以 —— 抓源这一步
+# 始终留在 CI，本机只负责探测（tools\本机测速.bat）。
 sources:
-  # ── 已验证可用的节点源 ─────────────────────────────────────────
+  # ── 大合集：一次性拉几百到上千个节点 ────────────────────────────
+  - name: "anaer-Sub"
+    url: "https://raw.githubusercontent.com/anaer/Sub/main/clash.yaml"
+    enabled: true
+
+  - name: "w1770946466-Auto_proxy"
+    url: "https://raw.githubusercontent.com/w1770946466/Auto_proxy/main/Long_term_subscription_num"
+    enabled: true
+
+  - name: "peasoft-NoMoreWalls"
+    url: "https://raw.githubusercontent.com/peasoft/NoMoreWalls/master/list.txt"
+    enabled: true
+
+  - name: "free18-v2ray"
+    url: "https://raw.githubusercontent.com/free18/v2ray/main/c.yaml"
+    enabled: true
+
+  - name: "ermaozi-get_subscribe"
+    url: "https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/clash.yml"
+    enabled: true
+
+  - name: "mahdibland-V2RayAggregator"
+    url: "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/Eternity.yml"
+    enabled: true
+
+  - name: "ts-sf-fly"
+    url: "https://raw.githubusercontent.com/ts-sf/fly/main/v2"
+    enabled: true
+
+  - name: "roosterkid-openproxylist"
+    url: "https://raw.githubusercontent.com/roosterkid/openproxylist/main/V2RAY_RAW.txt"
+    enabled: true
+
+  - name: "chengaopan-AutoMergePublicNodes"
+    url: "https://raw.githubusercontent.com/chengaopan/AutoMergePublicNodes/master/list.yml"
+    enabled: true
+
+  # ── 按地区切好的源，补 US/JP/SG/HK/TW 覆盖 ─────────────────────
   - name: "zhuhaiuk-free"
     url: "https://raw.githubusercontent.com/zhuhaiuk/free-nodes/main/clash_config.yaml"
-    type: yaml
     enabled: true
 
   - name: "au1rxx-US"
     url: "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/by-country/clash-US.yaml"
-    type: yaml
     enabled: true
 
   - name: "au1rxx-TW"
     url: "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/by-country/clash-TW.yaml"
-    type: yaml
     enabled: true
 
   - name: "au1rxx-HK"
     url: "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/by-country/clash-HK.yaml"
-    type: yaml
     enabled: true
 
   - name: "au1rxx-JP"
     url: "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/by-country/clash-JP.yaml"
-    type: yaml
     enabled: true
 
   - name: "au1rxx-SG"
     url: "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/by-country/clash-SG.yaml"
-    type: yaml
+    enabled: true
+
+  # ── 小体量源（节点少但更新频繁，留着当新鲜血液）───────────────
+  - name: "ripaojiedian-freenode"
+    url: "https://raw.githubusercontent.com/ripaojiedian/freenode/main/clash"
+    enabled: true
+
+  - name: "Pawdroid-Free-servers"
+    url: "https://raw.githubusercontent.com/Pawdroid/Free-servers/main/sub"
+    enabled: true
+
+  - name: "freefq-free"
+    url: "https://raw.githubusercontent.com/freefq/free/master/v2"
+    enabled: true
+
+  - name: "shaoyouvip-free"
+    url: "https://raw.githubusercontent.com/shaoyouvip/free/main/base64.txt"
     enabled: true
